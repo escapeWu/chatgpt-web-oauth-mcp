@@ -190,6 +190,20 @@ pgrep -af cloudflared || true
 
 A TLS handshake failure at Cloudflare edge means the hostname certificate/SSL configuration is not ready or not covering the subdomain. It is not a local MCP bug.
 
+## Enable Obsidian Tool Group
+
+To expose Obsidian to ChatGPT Web through this same MCP endpoint, install and enable the Obsidian Local REST API community plugin, then add its key to `.env`:
+
+```bash
+OBSIDIAN_API_KEY=<obsidian-local-rest-api-key>
+OBSIDIAN_HOST=127.0.0.1
+OBSIDIAN_PORT=27124
+OBSIDIAN_PROTOCOL=https
+OBSIDIAN_VERIFY_SSL=0
+```
+
+Rerun `./scripts/install-launchd.sh --mcp-only` after changing these values so launchd receives the new environment. Verify with `obsidian_status` from ChatGPT, or locally by checking `server_info` includes `obsidian_*` tools.
+
 ## Register in ChatGPT Web
 
 Use:
@@ -236,7 +250,9 @@ Then verify local and public metadata again. The metadata must show the new host
 
 6. **ChatGPT posts to `/` after OAuth.** If logs show `POST /` returning `404 Not Found` right after `POST /oauth/token 200 OK`, add or verify the root compatibility alias that rewrites `/` to `/mcp`.
 
-7. **Leaking secrets while debugging.** Redact token values when printing `.env`, process args, or logs.
+7. **Obsidian tools visible but failing.** They require the Obsidian Local REST API plugin to be running on `OBSIDIAN_HOST:OBSIDIAN_PORT` and `OBSIDIAN_API_KEY` to be present in the launchd environment. After editing `.env`, rerun `install-launchd.sh --mcp-only`.
+
+8. **Leaking secrets while debugging.** Redact token values when printing `.env`, process args, or logs.
 
 ## Verification Checklist
 

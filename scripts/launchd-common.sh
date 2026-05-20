@@ -153,6 +153,12 @@ prepare_launchd_env() {
   local override_launchd_dir="${CHATGPT_MCP_LAUNCHD_DIR:-}"
   local override_launchd_log_dir="${CHATGPT_MCP_LAUNCHD_LOG_DIR:-}"
   local override_launchd_path="${CHATGPT_MCP_LAUNCHD_PATH:-}"
+  local override_obsidian_api_key="${OBSIDIAN_API_KEY:-}"
+  local override_obsidian_host="${OBSIDIAN_HOST:-}"
+  local override_obsidian_port="${OBSIDIAN_PORT:-}"
+  local override_obsidian_protocol="${OBSIDIAN_PROTOCOL:-}"
+  local override_obsidian_verify_ssl="${OBSIDIAN_VERIFY_SSL:-}"
+  local override_obsidian_timeout_seconds="${OBSIDIAN_TIMEOUT_SECONDS:-}"
 
   load_env_file
 
@@ -177,9 +183,19 @@ prepare_launchd_env() {
   export CHATGPT_MCP_LAUNCHD_LOG_DIR="${override_launchd_log_dir:-${CHATGPT_MCP_LAUNCHD_LOG_DIR:-${HOME}/Library/Logs/chatgpt-web-oauth-mcp}}"
   export CHATGPT_MCP_LAUNCHD_PATH="${override_launchd_path:-${CHATGPT_MCP_LAUNCHD_PATH:-${CURRENT_SHELL_PATH}}}"
   export CHATGPT_MCP_EXTERNAL_CLOUDFLARED="${override_external_cloudflared:-${CHATGPT_MCP_EXTERNAL_CLOUDFLARED:-0}}"
+  export OBSIDIAN_HOST="${override_obsidian_host:-${OBSIDIAN_HOST:-127.0.0.1}}"
+  export OBSIDIAN_PORT="${override_obsidian_port:-${OBSIDIAN_PORT:-27124}}"
+  export OBSIDIAN_PROTOCOL="${override_obsidian_protocol:-${OBSIDIAN_PROTOCOL:-https}}"
+  export OBSIDIAN_VERIFY_SSL="${override_obsidian_verify_ssl:-${OBSIDIAN_VERIFY_SSL:-0}}"
+  export OBSIDIAN_TIMEOUT_SECONDS="${override_obsidian_timeout_seconds:-${OBSIDIAN_TIMEOUT_SECONDS:-10}}"
 
   if [[ -n "${override_auth_token}" ]]; then
     export CHATGPT_MCP_AUTH_TOKEN="${override_auth_token}"
+  fi
+  if [[ -n "${override_obsidian_api_key}" ]]; then
+    export OBSIDIAN_API_KEY="${override_obsidian_api_key}"
+  elif [[ -n "${OBSIDIAN_API_KEY:-}" ]]; then
+    export OBSIDIAN_API_KEY
   fi
 }
 

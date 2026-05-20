@@ -151,6 +151,20 @@ CHATGPT_MCP_EXTERNAL_CLOUDFLARED=1
 ./scripts/uninstall-launchd.sh
 ```
 
+## Obsidian 工具组
+
+本项目可以把 Obsidian 作为一组工具暴露给 ChatGPT Web，内部调用 Obsidian Local REST API 社区插件。先在 Obsidian 中启用该插件并复制 API key，然后在 `.env` 中加入：
+
+```bash
+OBSIDIAN_API_KEY="<your-obsidian-local-rest-api-key>"
+OBSIDIAN_HOST=127.0.0.1
+OBSIDIAN_PORT=27124
+OBSIDIAN_PROTOCOL=https
+OBSIDIAN_VERIFY_SSL=0
+```
+
+可用工具包括 `obsidian_status`、文件列表/读取、简单搜索、JsonLogic 复杂搜索、标签搜索、frontmatter 读取、append/patch/put/delete 写入、周期笔记和最近修改。
+
 ## 环境变量
 
 | 变量 | 是否必需 | 默认值 |
@@ -173,6 +187,11 @@ CHATGPT_MCP_EXTERNAL_CLOUDFLARED=1
 | `CHATGPT_MCP_DELEGATE_TIMEOUT` | 否 | `1800` |
 | `CHATGPT_MCP_DEBUG_MCP_LOGGING` | 否 | `0` |
 | `CHATGPT_MCP_GRACEFUL_SHUTDOWN_SECONDS` | 否 | `30` |
+| `OBSIDIAN_API_KEY` | Obsidian 工具必需 | 空 |
+| `OBSIDIAN_HOST` | 否 | `127.0.0.1` |
+| `OBSIDIAN_PORT` | 否 | `27124` |
+| `OBSIDIAN_PROTOCOL` | 否 | `https` |
+| `OBSIDIAN_VERIFY_SSL` | 否 | `0` |
 
 ## 暴露的 MCP 工具
 
@@ -190,6 +209,7 @@ CHATGPT_MCP_EXTERNAL_CLOUDFLARED=1
 | `delegate_task` | 委托本地 Codex 或 Claude Code 做复杂任务 |
 | `get_task` / `wait_task` / `cancel_task` | 管理后台任务 |
 | `purge_tasks` | 清理过期任务日志 |
+| `obsidian_status` / `obsidian_list_files_in_vault` / `obsidian_get_file_contents` / `obsidian_simple_search` / `obsidian_patch_content` | 通过 Obsidian Local REST API 插件操作 vault |
 
 ## 安全提醒
 

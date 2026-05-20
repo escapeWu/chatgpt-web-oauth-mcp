@@ -150,6 +150,20 @@ Useful commands:
 ./scripts/uninstall-launchd.sh
 ```
 
+## Obsidian tool group
+
+This project can expose an Obsidian tool group to ChatGPT Web by calling the Obsidian Local REST API community plugin. Enable the plugin in Obsidian, copy its API key, then add these values to `.env` and reinstall/reload the MCP service:
+
+```bash
+OBSIDIAN_API_KEY="<your-obsidian-local-rest-api-key>"
+OBSIDIAN_HOST=127.0.0.1
+OBSIDIAN_PORT=27124
+OBSIDIAN_PROTOCOL=https
+OBSIDIAN_VERIFY_SSL=0
+```
+
+Available tools include `obsidian_status`, file listing/reading, simple and JsonLogic search, tag search, frontmatter reads, append/patch/put/delete writes, periodic notes, and recent changes.
+
 ## Environment variables
 
 | Variable | Required | Default |
@@ -172,6 +186,11 @@ Useful commands:
 | `CHATGPT_MCP_DELEGATE_TIMEOUT` | no | `1800` |
 | `CHATGPT_MCP_DEBUG_MCP_LOGGING` | no | `0` |
 | `CHATGPT_MCP_GRACEFUL_SHUTDOWN_SECONDS` | no | `30` |
+| `OBSIDIAN_API_KEY` | Obsidian tools | empty |
+| `OBSIDIAN_HOST` | no | `127.0.0.1` |
+| `OBSIDIAN_PORT` | no | `27124` |
+| `OBSIDIAN_PROTOCOL` | no | `https` |
+| `OBSIDIAN_VERIFY_SSL` | no | `0` |
 
 ## Tools exposed to MCP clients
 

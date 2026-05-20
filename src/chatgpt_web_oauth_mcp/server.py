@@ -23,6 +23,12 @@ from .config import (
     OAUTH_LOGIN_TOKEN,
     OAUTH_SCOPES,
     OAUTH_TOKEN_TTL_SECONDS,
+    OBSIDIAN_API_KEY,
+    OBSIDIAN_HOST,
+    OBSIDIAN_PORT,
+    OBSIDIAN_PROTOCOL,
+    OBSIDIAN_TIMEOUT_SECONDS,
+    OBSIDIAN_VERIFY_SSL,
     PORT,
     PUBLIC_BASE_URL,
     STATE_DIR,
@@ -41,6 +47,7 @@ from .gitops import git_log as git_log_impl
 from .gitops import git_show as git_show_impl
 from .gitops import git_status as git_status_impl
 from .oauth import OAuthRuntimeConfig
+from .obsidian import ObsidianClient, ObsidianConfig, fail as obsidian_fail, ok as obsidian_ok
 from .patching import apply_patch as apply_patch_impl
 from . import session
 from .pathing import resolve_cwd, resolve_path
@@ -96,6 +103,21 @@ def _current_oauth_config() -> OAuthRuntimeConfig:
 
 def _current_debug_mcp_logging() -> bool:
     return bool(globals().get("DEBUG_MCP_LOGGING", False))
+
+
+def _current_obsidian_config() -> ObsidianConfig:
+    return ObsidianConfig(
+        api_key=globals().get("OBSIDIAN_API_KEY", "") or "",
+        host=globals().get("OBSIDIAN_HOST", "127.0.0.1") or "127.0.0.1",
+        port=int(globals().get("OBSIDIAN_PORT", 27124) or 27124),
+        protocol=globals().get("OBSIDIAN_PROTOCOL", "https") or "https",
+        verify_ssl=bool(globals().get("OBSIDIAN_VERIFY_SSL", False)),
+        timeout_seconds=int(globals().get("OBSIDIAN_TIMEOUT_SECONDS", 10) or 10),
+    )
+
+
+def _obsidian_client() -> ObsidianClient:
+    return ObsidianClient(_current_obsidian_config())
 
 
 READ_ONLY_TOOL = {
@@ -413,6 +435,10 @@ async def server_info() -> dict[str, object]:
         "debug_mcp_logging": bool(DEBUG_MCP_LOGGING),
         "codex_command": CODEX_COMMAND,
         "claude_command": CLAUDE_COMMAND,
+        "obsidian": {
+            "configured": bool((globals().get("OBSIDIAN_API_KEY", "") or "").strip()),
+            "base_url": _current_obsidian_config().base_url,
+        },
         "tools": tools,
         "tool_count": len(tools),
     }
@@ -759,6 +785,237 @@ def purge_tasks(older_than_hours: float = 24 * 7, dry_run: bool = False) -> dict
         dry_run=dry_run,
     )
 
+
+
+@mcp.tool(
+    name="obsidian_status",
+    title="Obsidian Status",
+    annotations=READ_ONLY_TOOL,
+    description="Check whether the Obsidian Local REST API is configured and reachable.",
+)
+def obsidian_status() -> dict[str, object]:
+    config = _current_obsidian_config()
+    data: dict[str, object] = {
+        "configured": bool(config.api_key.strip()),
+        "base_url": config.base_url,
+        "host": config.host,
+        "port": config.port,
+        "protocol": config.protocol,
+    }
+    if not config.api_key.strip():
+        return {"success": False, "data": data, "error": {"code": "obsidian_not_configured", "message": "Set OBSIDIAN_API_KEY in .env after enabling the Obsidian Local REST API plugin."}}
+    try:
+        data["probe"] = _obsidian_client().status()
+        return obsidian_ok(data)
+    except Exception as exc:
+        return obsidian_fail(exc)
+
+
+@mcp.tool(
+    name="obsidian_list_files_in_vault",
+    title="Obsidian List Files In Vault",
+    annotations=READ_ONLY_TOOL,
+    description="List files and directories in the root of the Obsidian vault via the Local REST API.",
+)
+def obsidian_list_files_in_vault() -> dict[str, object]:
+    try:
+        return obsidian_ok(_obsidian_client().list_files_in_vault())
+    except Exception as exc:
+        return obsidian_fail(exc)
+
+
+@mcp.tool(
+    name="obsidian_list_files_in_dir",
+    title="Obsidian List Files In Directory",
+    annotations=READ_ONLY_TOOL,
+    description="List files and directories in a vault-relative Obsidian directory.",
+)
+def obsidian_list_files_in_dir(dirpath: str) -> dict[str, object]:
+    try:
+        return obsidian_ok(_obsidian_client().list_files_in_dir(dirpath))
+    except Exception as exc:
+        return obsidian_fail(exc)
+
+
+@mcp.tool(
+    name="obsidian_get_file_contents",
+    title="Obsidian Get File Contents",
+    annotations=READ_ONLY_TOOL,
+    description="Read a single Obsidian note/file by vault-relative path.",
+)
+def obsidian_get_file_contents(filepath: str) -> dict[str, object]:
+    try:
+        return obsidian_ok(_obsidian_client().get_file_contents(filepath), filepath=filepath)
+    except Exception as exc:
+        return obsidian_fail(exc)
+
+
+@mcp.tool(
+    name="obsidian_batch_get_file_contents",
+    title="Obsidian Batch Get File Contents",
+    annotations=READ_ONLY_TOOL,
+    description="Read multiple Obsidian files by vault-relative paths; individual failures are returned per item.",
+)
+def obsidian_batch_get_file_contents(filepaths: list[str]) -> dict[str, object]:
+    try:
+        return obsidian_ok(_obsidian_client().batch_get_file_contents(filepaths))
+    except Exception as exc:
+        return obsidian_fail(exc)
+
+
+@mcp.tool(
+    name="obsidian_simple_search",
+    title="Obsidian Simple Search",
+    annotations=READ_ONLY_TOOL,
+    description="Search Obsidian notes for plain text using the Local REST API simple search endpoint.",
+)
+def obsidian_simple_search(query: str, context_length: int = 100) -> dict[str, object]:
+    try:
+        return obsidian_ok(_obsidian_client().simple_search(query, context_length))
+    except Exception as exc:
+        return obsidian_fail(exc)
+
+
+@mcp.tool(
+    name="obsidian_complex_search",
+    title="Obsidian Complex Search",
+    annotations=READ_ONLY_TOOL,
+    description="Run an Obsidian Local REST API JsonLogic search query for tags, paths, regex, or content conditions.",
+)
+def obsidian_complex_search(query: dict[str, object]) -> dict[str, object]:
+    try:
+        return obsidian_ok(_obsidian_client().complex_search(query))
+    except Exception as exc:
+        return obsidian_fail(exc)
+
+
+@mcp.tool(
+    name="obsidian_search_by_tag",
+    title="Obsidian Search By Tag",
+    annotations=READ_ONLY_TOOL,
+    description="Find notes carrying a specific parsed Obsidian tag. Pass tag without '#'; optionally scope to a directory.",
+)
+def obsidian_search_by_tag(tag: str, dirpath: str | None = None) -> dict[str, object]:
+    try:
+        return obsidian_ok(_obsidian_client().search_by_tag(tag, dirpath))
+    except Exception as exc:
+        return obsidian_fail(exc)
+
+
+@mcp.tool(
+    name="obsidian_get_frontmatter",
+    title="Obsidian Get Frontmatter",
+    annotations=READ_ONLY_TOOL,
+    description="Return parsed YAML frontmatter for an Obsidian note as JSON.",
+)
+def obsidian_get_frontmatter(filepath: str) -> dict[str, object]:
+    try:
+        return obsidian_ok(_obsidian_client().get_frontmatter(filepath), filepath=filepath)
+    except Exception as exc:
+        return obsidian_fail(exc)
+
+
+@mcp.tool(
+    name="obsidian_append_content",
+    title="Obsidian Append Content",
+    annotations=LOCAL_WRITE_TOOL,
+    description="Append markdown content to a new or existing Obsidian file.",
+)
+def obsidian_append_content(filepath: str, content: str) -> dict[str, object]:
+    try:
+        _obsidian_client().append_content(filepath, content)
+        return obsidian_ok(filepath=filepath, message=f"Appended content to {filepath}")
+    except Exception as exc:
+        return obsidian_fail(exc)
+
+
+@mcp.tool(
+    name="obsidian_patch_content",
+    title="Obsidian Patch Content",
+    annotations=LOCAL_WRITE_TOOL,
+    description="Patch an Obsidian note relative to a heading, block reference, or frontmatter field using append/prepend/replace.",
+)
+def obsidian_patch_content(filepath: str, operation: str, target_type: str, target: str, content: str) -> dict[str, object]:
+    try:
+        _obsidian_client().patch_content(filepath, operation, target_type, target, content)
+        return obsidian_ok(filepath=filepath, message=f"Patched content in {filepath}")
+    except Exception as exc:
+        return obsidian_fail(exc)
+
+
+@mcp.tool(
+    name="obsidian_put_content",
+    title="Obsidian Put Content",
+    annotations=LOCAL_WRITE_TOOL,
+    description="Create or completely overwrite an Obsidian file. Prefer append/patch for non-destructive edits.",
+)
+def obsidian_put_content(filepath: str, content: str) -> dict[str, object]:
+    try:
+        _obsidian_client().put_content(filepath, content)
+        return obsidian_ok(filepath=filepath, message=f"Wrote content to {filepath}")
+    except Exception as exc:
+        return obsidian_fail(exc)
+
+
+@mcp.tool(
+    name="obsidian_delete_file",
+    title="Obsidian Delete File",
+    annotations=LOCAL_WRITE_TOOL,
+    description="Delete a vault-relative Obsidian file or directory. Requires confirm=true.",
+)
+def obsidian_delete_file(filepath: str, confirm: bool = False) -> dict[str, object]:
+    if not confirm:
+        return {"success": False, "error": {"code": "confirmation_required", "message": "Set confirm=true to delete an Obsidian file."}}
+    try:
+        _obsidian_client().delete_file(filepath)
+        return obsidian_ok(filepath=filepath, message=f"Deleted {filepath}")
+    except Exception as exc:
+        return obsidian_fail(exc)
+
+
+@mcp.tool(
+    name="obsidian_get_periodic_note",
+    title="Obsidian Get Periodic Note",
+    annotations=READ_ONLY_TOOL,
+    description="Get the current daily/weekly/monthly/quarterly/yearly Obsidian periodic note.",
+)
+def obsidian_get_periodic_note(period: str, note_type: str = "content") -> dict[str, object]:
+    if period not in {"daily", "weekly", "monthly", "quarterly", "yearly"}:
+        return {"success": False, "error": {"code": "invalid_period", "message": "period must be daily, weekly, monthly, quarterly, or yearly."}}
+    if note_type not in {"content", "metadata"}:
+        return {"success": False, "error": {"code": "invalid_note_type", "message": "note_type must be content or metadata."}}
+    try:
+        return obsidian_ok(_obsidian_client().get_periodic_note(period, note_type), period=period, note_type=note_type)
+    except Exception as exc:
+        return obsidian_fail(exc)
+
+
+@mcp.tool(
+    name="obsidian_get_recent_periodic_notes",
+    title="Obsidian Get Recent Periodic Notes",
+    annotations=READ_ONLY_TOOL,
+    description="Get recent Obsidian periodic notes for a period, optionally including content.",
+)
+def obsidian_get_recent_periodic_notes(period: str, limit: int = 5, include_content: bool = False) -> dict[str, object]:
+    if period not in {"daily", "weekly", "monthly", "quarterly", "yearly"}:
+        return {"success": False, "error": {"code": "invalid_period", "message": "period must be daily, weekly, monthly, quarterly, or yearly."}}
+    try:
+        return obsidian_ok(_obsidian_client().get_recent_periodic_notes(period, limit, include_content))
+    except Exception as exc:
+        return obsidian_fail(exc)
+
+
+@mcp.tool(
+    name="obsidian_get_recent_changes",
+    title="Obsidian Get Recent Changes",
+    annotations=READ_ONLY_TOOL,
+    description="Get recently modified Obsidian files using a Dataview DQL query through Local REST API.",
+)
+def obsidian_get_recent_changes(limit: int = 10, days: int = 90) -> dict[str, object]:
+    try:
+        return obsidian_ok(_obsidian_client().get_recent_changes(limit, days))
+    except Exception as exc:
+        return obsidian_fail(exc)
 
 def build_http_app():
     streamable_app = mcp.http_app(
