@@ -24,6 +24,7 @@ from .config import (
     OAUTH_SCOPES,
     OAUTH_TOKEN_TTL_SECONDS,
     OBSIDIAN_API_KEY,
+    ENABLE_OBSIDIAN,
     OBSIDIAN_HOST,
     OBSIDIAN_MCP_URL,
     OBSIDIAN_PORT,
@@ -441,9 +442,11 @@ async def server_info() -> dict[str, object]:
         "codex_command": CODEX_COMMAND,
         "claude_command": CLAUDE_COMMAND,
         "obsidian_proxy": {
+            "enabled": bool(globals().get("ENABLE_OBSIDIAN", False)),
             "configured": bool((globals().get("OBSIDIAN_API_KEY", "") or "").strip()),
             "mcp_url": _current_obsidian_config().mcp_url,
             "mode": "native_mcp_proxy",
+            "tool_prefix": "obsidian_",
         },
         "tools": tools,
         "tool_count": len(tools),
@@ -793,24 +796,34 @@ def purge_tasks(older_than_hours: float = 24 * 7, dry_run: bool = False) -> dict
 
 
 
+def _obsidian_tool(*args, **kwargs):
+    """Register Obsidian proxy tools only when explicitly enabled."""
+    if bool(globals().get("ENABLE_OBSIDIAN", False)):
+        return mcp.tool(*args, **kwargs)
 
-@mcp.tool(
-    name="vault_list",
+    def decorator(fn):
+        return fn
+
+    return decorator
+
+
+@_obsidian_tool(
+    name="obsidian_vault_list",
     title="Obsidian Vault List",
     annotations=READ_ONLY_TOOL,
-    description="Proxy to Obsidian Local REST API native MCP tool `vault_list`: list files and subdirectories inside a vault directory.",
+    description="Proxy to Obsidian native MCP tool `vault_list`: list files and subdirectories inside a vault directory.",
 )
-async def vault_list(path: str = "") -> dict[str, object]:
+async def obsidian_vault_list(path: str = "") -> dict[str, object]:
     return await _proxy_obsidian_tool("vault_list", {"path": path})
 
 
-@mcp.tool(
-    name="vault_read",
+@_obsidian_tool(
+    name="obsidian_vault_read",
     title="Obsidian Vault Read",
     annotations=READ_ONLY_TOOL,
     description="Proxy to native Obsidian MCP `vault_read`: read a file's content/metadata, or a targeted heading/block/frontmatter section.",
 )
-async def vault_read(
+async def obsidian_vault_read(
     path: str,
     targetType: str | None = None,
     target: str | None = None,
@@ -826,33 +839,33 @@ async def vault_read(
     return await _proxy_obsidian_tool("vault_read", args)
 
 
-@mcp.tool(
-    name="vault_write",
+@_obsidian_tool(
+    name="obsidian_vault_write",
     title="Obsidian Vault Write",
     annotations=LOCAL_WRITE_TOOL,
     description="Proxy to native Obsidian MCP `vault_write`: create or overwrite a vault file.",
 )
-async def vault_write(path: str, content: str) -> dict[str, object]:
+async def obsidian_vault_write(path: str, content: str) -> dict[str, object]:
     return await _proxy_obsidian_tool("vault_write", {"path": path, "content": content})
 
 
-@mcp.tool(
-    name="vault_append",
+@_obsidian_tool(
+    name="obsidian_vault_append",
     title="Obsidian Vault Append",
     annotations=LOCAL_WRITE_TOOL,
     description="Proxy to native Obsidian MCP `vault_append`: append content to a vault file, creating it if missing.",
 )
-async def vault_append(path: str, content: str) -> dict[str, object]:
+async def obsidian_vault_append(path: str, content: str) -> dict[str, object]:
     return await _proxy_obsidian_tool("vault_append", {"path": path, "content": content})
 
 
-@mcp.tool(
-    name="vault_patch",
+@_obsidian_tool(
+    name="obsidian_vault_patch",
     title="Obsidian Vault Patch",
     annotations=LOCAL_WRITE_TOOL,
     description="Proxy to native Obsidian MCP `vault_patch`: patch a heading, block reference, or frontmatter field.",
 )
-async def vault_patch(
+async def obsidian_vault_patch(
     path: str,
     targetType: str,
     target: str,
@@ -885,121 +898,121 @@ async def vault_patch(
     return await _proxy_obsidian_tool("vault_patch", args)
 
 
-@mcp.tool(
-    name="vault_delete",
+@_obsidian_tool(
+    name="obsidian_vault_delete",
     title="Obsidian Vault Delete",
     annotations=LOCAL_WRITE_TOOL,
     description="Proxy to native Obsidian MCP `vault_delete`: delete a vault file. Requires confirm=true at this bridge layer.",
 )
-async def vault_delete(path: str, confirm: bool = False) -> dict[str, object]:
+async def obsidian_vault_delete(path: str, confirm: bool = False) -> dict[str, object]:
     if not confirm:
         return {"success": False, "error": {"code": "confirmation_required", "message": "Set confirm=true to delete an Obsidian file."}}
     return await _proxy_obsidian_tool("vault_delete", {"path": path})
 
 
-@mcp.tool(
-    name="vault_get_document_map",
+@_obsidian_tool(
+    name="obsidian_vault_get_document_map",
     title="Obsidian Vault Get Document Map",
     annotations=READ_ONLY_TOOL,
     description="Proxy to native Obsidian MCP `vault_get_document_map`: list headings, block references, and frontmatter fields in a file.",
 )
-async def vault_get_document_map(path: str) -> dict[str, object]:
+async def obsidian_vault_get_document_map(path: str) -> dict[str, object]:
     return await _proxy_obsidian_tool("vault_get_document_map", {"path": path})
 
 
-@mcp.tool(
-    name="active_file_get_path",
+@_obsidian_tool(
+    name="obsidian_active_file_get_path",
     title="Obsidian Active File Get Path",
     annotations=READ_ONLY_TOOL,
     description="Proxy to native Obsidian MCP `active_file_get_path`: return the vault path of the currently active file.",
 )
-async def active_file_get_path() -> dict[str, object]:
+async def obsidian_active_file_get_path() -> dict[str, object]:
     return await _proxy_obsidian_tool("active_file_get_path", {})
 
 
-@mcp.tool(
-    name="periodic_note_get_path",
+@_obsidian_tool(
+    name="obsidian_periodic_note_get_path",
     title="Obsidian Periodic Note Get Path",
     annotations=LOCAL_WRITE_TOOL,
     description="Proxy to native Obsidian MCP `periodic_note_get_path`: get or create the current periodic note path.",
 )
-async def periodic_note_get_path(period: str) -> dict[str, object]:
+async def obsidian_periodic_note_get_path(period: str) -> dict[str, object]:
     return await _proxy_obsidian_tool("periodic_note_get_path", {"period": period})
 
 
-@mcp.tool(
-    name="search_query",
+@_obsidian_tool(
+    name="obsidian_search_query",
     title="Obsidian Search Query",
     annotations=READ_ONLY_TOOL,
     description="Proxy to native Obsidian MCP `search_query`: run a JsonLogic query against note metadata.",
 )
-async def search_query(query: dict[str, object]) -> dict[str, object]:
+async def obsidian_search_query(query: dict[str, object]) -> dict[str, object]:
     return await _proxy_obsidian_tool("search_query", {"query": query})
 
 
-@mcp.tool(
-    name="search_simple",
+@_obsidian_tool(
+    name="obsidian_search_simple",
     title="Obsidian Search Simple",
     annotations=READ_ONLY_TOOL,
     description="Proxy to native Obsidian MCP `search_simple`: full-text search using Obsidian's built-in search.",
 )
-async def search_simple(query: str, contextLength: float | None = None) -> dict[str, object]:
+async def obsidian_search_simple(query: str, contextLength: float | None = None) -> dict[str, object]:
     args: dict[str, object] = {"query": query}
     if contextLength is not None:
         args["contextLength"] = contextLength
     return await _proxy_obsidian_tool("search_simple", args)
 
 
-@mcp.tool(
-    name="tag_list",
+@_obsidian_tool(
+    name="obsidian_tag_list",
     title="Obsidian Tag List",
     annotations=READ_ONLY_TOOL,
     description="Proxy to native Obsidian MCP `tag_list`: list all tags across the vault with usage counts.",
 )
-async def tag_list() -> dict[str, object]:
+async def obsidian_tag_list() -> dict[str, object]:
     return await _proxy_obsidian_tool("tag_list", {})
 
 
-@mcp.tool(
-    name="command_list",
+@_obsidian_tool(
+    name="obsidian_command_list",
     title="Obsidian Command List",
     annotations=READ_ONLY_TOOL,
     description="Proxy to native Obsidian MCP `command_list`: list registered Obsidian commands.",
 )
-async def command_list() -> dict[str, object]:
+async def obsidian_command_list() -> dict[str, object]:
     return await _proxy_obsidian_tool("command_list", {})
 
 
-@mcp.tool(
-    name="command_execute",
+@_obsidian_tool(
+    name="obsidian_command_execute",
     title="Obsidian Command Execute",
     annotations=LOCAL_WRITE_TOOL,
     description="Proxy to native Obsidian MCP `command_execute`: execute an Obsidian command by ID.",
 )
-async def command_execute(commandId: str) -> dict[str, object]:
+async def obsidian_command_execute(commandId: str) -> dict[str, object]:
     return await _proxy_obsidian_tool("command_execute", {"commandId": commandId})
 
 
-@mcp.tool(
-    name="open_file",
+@_obsidian_tool(
+    name="obsidian_open_file",
     title="Obsidian Open File",
     annotations=LOCAL_STATE_TOOL,
     description="Proxy to native Obsidian MCP `open_file`: open a vault file in the Obsidian UI.",
 )
-async def open_file(path: str, newLeaf: bool | None = None) -> dict[str, object]:
+async def obsidian_open_file(path: str, newLeaf: bool | None = None) -> dict[str, object]:
     args: dict[str, object] = {"path": path}
     if newLeaf is not None:
         args["newLeaf"] = newLeaf
     return await _proxy_obsidian_tool("open_file", args)
 
 
-@mcp.tool(
-    name="vault_mcp_list_tools",
+@_obsidian_tool(
+    name="obsidian_mcp_list_tools",
     title="Obsidian Native MCP List Tools",
     annotations=READ_ONLY_TOOL,
     description="List tools advertised by the Obsidian Local REST API plugin's native MCP server.",
 )
-async def vault_mcp_list_tools() -> dict[str, object]:
+async def obsidian_mcp_list_tools() -> dict[str, object]:
     try:
         return await obsidian_list_native_tools(_current_obsidian_config())
     except Exception as exc:

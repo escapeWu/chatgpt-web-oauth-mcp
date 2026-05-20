@@ -48,6 +48,7 @@ src/chatgpt_web_oauth_mcp/
 | `delegate_task` | Submit long-running tasks to codex/claude-code |
 | `get_task` / `wait_task` / `cancel_task` | Manage delegated/background tasks |
 | `purge_tasks` | GC old task logs under `STATE_DIR/tasks` |
+| `obsidian_*` tools | Optional Obsidian native MCP proxy tools; only registered when `CHATGPT_MCP_ENABLE_OBSIDIAN=1` |
 
 ## Key concepts
 

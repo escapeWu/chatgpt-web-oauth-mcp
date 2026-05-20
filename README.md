@@ -154,15 +154,17 @@ Useful commands:
 
 This project can expose the Obsidian Local REST API plugin's **built-in MCP server** to ChatGPT Web through the same public OAuth MCP endpoint. ChatGPT still connects only to this project; this project connects locally to Obsidian's native MCP endpoint.
 
-Enable the Obsidian Local REST API plugin, copy its API key, then add these values to `.env` and reinstall/reload the MCP service:
+Obsidian is opt-in. Enable the Obsidian Local REST API plugin, copy its API key, then add these values to `.env` and reinstall the MCP service:
 
 ```bash
+CHATGPT_MCP_ENABLE_OBSIDIAN=1
+CHATGPT_MCP_OAUTH_SCOPES="local-ops obsidian"
 OBSIDIAN_API_KEY="<your-obsidian-local-rest-api-key>"
 OBSIDIAN_MCP_URL=https://127.0.0.1:27124/mcp
 OBSIDIAN_VERIFY_SSL=0
 ```
 
-The bridge exposes the plugin's native MCP tools directly, including `vault_list`, `vault_read`, `vault_write`, `vault_append`, `vault_patch`, `vault_delete`, `vault_get_document_map`, `active_file_get_path`, `periodic_note_get_path`, `search_query`, `search_simple`, `tag_list`, `command_list`, `command_execute`, and `open_file`. Use `vault_mcp_list_tools` to inspect the tools currently advertised by the local Obsidian plugin.
+When enabled, the bridge exposes prefixed tools such as `obsidian_vault_list`, `obsidian_vault_read`, `obsidian_vault_patch`, `obsidian_search_simple`, `obsidian_command_execute`, and `obsidian_open_file`. Use `obsidian_mcp_list_tools` to inspect the tools currently advertised by the local Obsidian plugin. If `CHATGPT_MCP_ENABLE_OBSIDIAN=0` or is unset, no `obsidian_*` tools are registered.
 
 ## Environment variables
 
@@ -186,7 +188,8 @@ The bridge exposes the plugin's native MCP tools directly, including `vault_list
 | `CHATGPT_MCP_DELEGATE_TIMEOUT` | no | `1800` |
 | `CHATGPT_MCP_DEBUG_MCP_LOGGING` | no | `0` |
 | `CHATGPT_MCP_GRACEFUL_SHUTDOWN_SECONDS` | no | `30` |
-| `OBSIDIAN_API_KEY` | Obsidian native MCP proxy | empty |
+| `CHATGPT_MCP_ENABLE_OBSIDIAN` | no | `0` |
+| `OBSIDIAN_API_KEY` | required only when Obsidian proxy is enabled | empty |
 | `OBSIDIAN_MCP_URL` | no | `https://127.0.0.1:27124/mcp/` |
 | `OBSIDIAN_VERIFY_SSL` | no | `0` |
 
@@ -206,6 +209,7 @@ The bridge exposes the plugin's native MCP tools directly, including `vault_list
 | `delegate_task` | Delegate complex work to local Codex or Claude Code |
 | `get_task` / `wait_task` / `cancel_task` | Manage background tasks |
 | `purge_tasks` | Clean stale task logs |
+| `obsidian_*` tools | Optional Obsidian native MCP proxy tools; only registered when `CHATGPT_MCP_ENABLE_OBSIDIAN=1` |
 
 ## Security notes
 

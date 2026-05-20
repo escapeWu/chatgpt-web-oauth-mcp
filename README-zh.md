@@ -155,15 +155,17 @@ CHATGPT_MCP_EXTERNAL_CLOUDFLARED=1
 
 本项目可以把 Obsidian Local REST API 插件**内置的 MCP server**通过同一个公网 OAuth MCP endpoint 暴露给 ChatGPT Web。ChatGPT 仍然只连接本项目；本项目在本机连接 Obsidian 的原生 MCP endpoint。
 
-先启用 Obsidian Local REST API 插件并复制 API key，然后在 `.env` 中加入：
+Obsidian 是可选能力。先启用 Obsidian Local REST API 插件并复制 API key，然后在 `.env` 中加入并重新安装 MCP 服务：
 
 ```bash
+CHATGPT_MCP_ENABLE_OBSIDIAN=1
+CHATGPT_MCP_OAUTH_SCOPES="local-ops obsidian"
 OBSIDIAN_API_KEY="<your-obsidian-local-rest-api-key>"
 OBSIDIAN_MCP_URL=https://127.0.0.1:27124/mcp
 OBSIDIAN_VERIFY_SSL=0
 ```
 
-桥接层会直接暴露插件的原生 MCP 工具，包括 `vault_list`、`vault_read`、`vault_write`、`vault_append`、`vault_patch`、`vault_delete`、`vault_get_document_map`、`active_file_get_path`、`periodic_note_get_path`、`search_query`、`search_simple`、`tag_list`、`command_list`、`command_execute` 和 `open_file`。可以用 `vault_mcp_list_tools` 查看当前本地 Obsidian 插件实际广播出来的工具。
+启用后，桥接层暴露带 `obsidian_*` 前缀的工具，例如 `obsidian_vault_list`、`obsidian_vault_read`、`obsidian_vault_patch`、`obsidian_search_simple`、`obsidian_command_execute` 和 `obsidian_open_file`。可以用 `obsidian_mcp_list_tools` 查看本地 Obsidian 插件实际广播出来的工具。如果 `CHATGPT_MCP_ENABLE_OBSIDIAN=0` 或未设置，则不会注册任何 `obsidian_*` 工具。
 
 ## 环境变量
 
@@ -187,7 +189,8 @@ OBSIDIAN_VERIFY_SSL=0
 | `CHATGPT_MCP_DELEGATE_TIMEOUT` | 否 | `1800` |
 | `CHATGPT_MCP_DEBUG_MCP_LOGGING` | 否 | `0` |
 | `CHATGPT_MCP_GRACEFUL_SHUTDOWN_SECONDS` | 否 | `30` |
-| `OBSIDIAN_API_KEY` | Obsidian 原生 MCP 代理必需 | 空 |
+| `CHATGPT_MCP_ENABLE_OBSIDIAN` | 否 | `0` |
+| `OBSIDIAN_API_KEY` | 仅启用 Obsidian 代理时必需 | 空 |
 | `OBSIDIAN_MCP_URL` | 否 | `https://127.0.0.1:27124/mcp/` |
 | `OBSIDIAN_VERIFY_SSL` | 否 | `0` |
 
@@ -207,7 +210,7 @@ OBSIDIAN_VERIFY_SSL=0
 | `delegate_task` | 委托本地 Codex 或 Claude Code 做复杂任务 |
 | `get_task` / `wait_task` / `cancel_task` | 管理后台任务 |
 | `purge_tasks` | 清理过期任务日志 |
-| `vault_list` / `vault_read` / `vault_patch` / `search_simple` / `command_execute` / `open_file` | 通过 Obsidian Local REST API 插件的原生 MCP server 操作 vault |
+| `obsidian_*` tools | 可选的 Obsidian 原生 MCP 代理工具；仅 `CHATGPT_MCP_ENABLE_OBSIDIAN=1` 时注册 |
 
 ## 安全提醒
 

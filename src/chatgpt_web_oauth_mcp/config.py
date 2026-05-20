@@ -67,6 +67,7 @@ GRACEFUL_SHUTDOWN_SECONDS = int(
     os.environ.get("CHATGPT_MCP_GRACEFUL_SHUTDOWN_SECONDS", "30")
 )
 
+ENABLE_OBSIDIAN = _env_flag("CHATGPT_MCP_ENABLE_OBSIDIAN", default=False)
 OBSIDIAN_API_KEY = os.environ.get("OBSIDIAN_API_KEY", "").strip()
 OBSIDIAN_HOST = os.environ.get("OBSIDIAN_HOST", "127.0.0.1").strip() or "127.0.0.1"
 OBSIDIAN_PORT = int(os.environ.get("OBSIDIAN_PORT", "27124"))

@@ -67,6 +67,22 @@ lsof -nP -iTCP:8766 -sTCP:LISTEN || true
 
 If the Cloudflare Tunnel is external, it is acceptable for `cloudflared` to already be running, but port `8766` should be free before installing this MCP launchd service.
 
+
+## Human-in-the-loop Installation Flow
+
+When a user asks to install a repository as a local ChatGPT Web MCP server, do not assume every optional integration should be enabled. First sync/clone the repo, read `AGENTS.md` and this skill, then ask the human to fill only the missing decisions.
+
+Required decisions before writing final `.env`:
+
+- Local workspace root, e.g. `/Users/<user>/workspace`.
+- Public access strategy: existing Cloudflare Tunnel, nginx/Caddy reverse proxy, or not created yet.
+- Public base URL, e.g. `https://mcp.example.com`; if missing, install the local MCP first and tell the user to create a public HTTPS route to `http://127.0.0.1:8766`.
+- Optional integrations. Obsidian must be explicit opt-in. If the user says they do not need Obsidian, set `CHATGPT_MCP_ENABLE_OBSIDIAN=0` and do not configure `OBSIDIAN_*`.
+
+After local MCP is ready, explain the next human step clearly: create a Cloudflare Tunnel connector or nginx/Caddy HTTPS reverse proxy whose upstream is `http://127.0.0.1:8766`, then give the final domain back to the agent. Only after the domain is known should `CHATGPT_MCP_PUBLIC_BASE_URL` be finalized and launchd reinstalled.
+
+After public verification passes, guide the user to ChatGPT Web: create a custom app/connector, use `https://<public-host>/mcp`, choose OAuth with dynamic client registration, and enter `CHATGPT_MCP_OAUTH_LOGIN_TOKEN` on the authorization page.
+
 ## Configure `.env`
 
 The local secret file lives at:
@@ -88,6 +104,7 @@ CHATGPT_MCP_AUTH_TOKEN=<long-random-secret>
 CHATGPT_MCP_OAUTH_LOGIN_TOKEN=<separate-long-random-secret>
 CHATGPT_MCP_OAUTH_SCOPES=local-ops
 CHATGPT_MCP_OAUTH_TOKEN_TTL_SECONDS=86400
+CHATGPT_MCP_ENABLE_OBSIDIAN=0
 CHATGPT_MCP_EXTERNAL_CLOUDFLARED=1
 CHATGPT_MCP_CODEX_COMMAND=codex
 CHATGPT_MCP_CLAUDE_COMMAND=claude
@@ -192,17 +209,19 @@ A TLS handshake failure at Cloudflare edge means the hostname certificate/SSL co
 
 ## Enable Obsidian Native MCP Proxy
 
-To expose Obsidian to ChatGPT Web through this same OAuth MCP endpoint, install and enable the Obsidian Local REST API plugin. Use the plugin's built-in Streamable HTTP MCP server locally; do not install third-party `mcp-obsidian` unless explicitly testing alternatives.
+Obsidian is optional and must be explicitly confirmed by the human. If they decline it, leave `CHATGPT_MCP_ENABLE_OBSIDIAN=0`; no `obsidian_*` tools will be registered in MCP `tools/list`.
 
-Add the plugin API key and endpoint to `.env`:
+If the human opts in, install and enable the Obsidian Local REST API plugin. Use the plugin's built-in Streamable HTTP MCP server locally; do not install third-party `mcp-obsidian` unless explicitly testing alternatives. Add the plugin API key and endpoint to `.env`:
 
 ```bash
+CHATGPT_MCP_ENABLE_OBSIDIAN=1
+CHATGPT_MCP_OAUTH_SCOPES="local-ops obsidian"
 OBSIDIAN_API_KEY=<obsidian-local-rest-api-key>
 OBSIDIAN_MCP_URL=https://127.0.0.1:27124/mcp
 OBSIDIAN_VERIFY_SSL=0
 ```
 
-If the self-signed HTTPS endpoint causes client issues, enable the plugin's HTTP server and use `OBSIDIAN_MCP_URL=http://127.0.0.1:27123/mcp/`. Rerun `./scripts/install-launchd.sh --mcp-only` after changing these values so launchd receives the new environment. Verify with `vault_mcp_list_tools` from ChatGPT or via local MCP smoke tests.
+The bridge exposes prefixed tools such as `obsidian_vault_list`, `obsidian_vault_read`, `obsidian_vault_patch`, `obsidian_search_simple`, `obsidian_command_execute`, and `obsidian_open_file`, while still proxying to upstream native tool names like `vault_list` and `search_simple`. If the self-signed HTTPS endpoint causes client issues, enable the plugin's HTTP server and use `OBSIDIAN_MCP_URL=http://127.0.0.1:27123/mcp/`. Rerun `./scripts/install-launchd.sh --mcp-only` after changing these values so launchd receives the new environment. Verify with `obsidian_mcp_list_tools` from ChatGPT or via local MCP smoke tests.
 
 ## Register in ChatGPT Web
 
@@ -214,7 +233,18 @@ Authentication: OAuth
 Client registration: Dynamic registration
 ```
 
-When the authorization page asks for a login token, enter `CHATGPT_MCP_OAUTH_LOGIN_TOKEN` from `.env`.
+When the authorization page asks for a login token, enter `CHATGPT_MCP_OAUTH_LOGIN_TOKEN` from `.env`. To print it locally without showing other secrets:
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+for line in Path(".env").read_text().splitlines():
+    if line.startswith("CHATGPT_MCP_OAUTH_LOGIN_TOKEN="):
+        print(line.split("=", 1)[1])
+PY
+```
+
+For local curl smoke tests only, use `CHATGPT_MCP_AUTH_TOKEN`, not the OAuth login token.
 
 Do not expose `CHATGPT_MCP_AUTH_TOKEN` or `CHATGPT_MCP_OAUTH_LOGIN_TOKEN` in chat, logs, README, screenshots, or commits.
 
@@ -250,15 +280,18 @@ Then verify local and public metadata again. The metadata must show the new host
 
 6. **ChatGPT posts to `/` after OAuth.** If logs show `POST /` returning `404 Not Found` right after `POST /oauth/token 200 OK`, add or verify the root compatibility alias that rewrites `/` to `/mcp`.
 
-7. **Obsidian native MCP tools visible but failing.** They require the Obsidian Local REST API plugin to be running, `OBSIDIAN_MCP_URL` to point at its `/mcp/` endpoint, and `OBSIDIAN_API_KEY` to be present in the launchd environment. After editing `.env`, rerun `install-launchd.sh --mcp-only`.
+7. **Obsidian native MCP tools missing.** This is expected when `CHATGPT_MCP_ENABLE_OBSIDIAN=0`; the tools are opt-in and use the `obsidian_*` prefix when enabled. If enabled but missing, rerun `install-launchd.sh --mcp-only` so launchd receives the new environment.
 
-8. **Leaking secrets while debugging.** Redact token values when printing `.env`, process args, or logs.
+8. **Obsidian native MCP tools visible but failing.** They require the Obsidian Local REST API plugin to be running, `OBSIDIAN_MCP_URL` to point at its `/mcp/` endpoint, and `OBSIDIAN_API_KEY` to be present in the launchd environment. After editing `.env`, rerun `install-launchd.sh --mcp-only`.
+
+9. **Leaking secrets while debugging.** Redact token values when printing `.env`, process args, or logs.
 
 ## Verification Checklist
 
 - [ ] `.env` exists and is mode `600` or otherwise private.
 - [ ] `CHATGPT_MCP_PUBLIC_BASE_URL` is the exact HTTPS host used in ChatGPT Web.
 - [ ] `CHATGPT_MCP_EXTERNAL_CLOUDFLARED=1` when using an existing tunnel.
+- [ ] Obsidian opt-in decision is recorded; if disabled, `CHATGPT_MCP_ENABLE_OBSIDIAN=0` and no `obsidian_*` tools appear.
 - [ ] `./scripts/install-launchd.sh --mcp-only` completed successfully.
 - [ ] `launchd-status.sh` says cloudflared is external / not managed.
 - [ ] Local `/mcp` responds on `127.0.0.1:8766`.
