@@ -473,6 +473,12 @@ class MCPCompatibilityDispatcher:
 
         path = str(scope.get("path", ""))
         method = str(scope.get("method", "GET")).upper()
+        if path == "/":
+            # Some ChatGPT connector flows POST to the origin root after OAuth even
+            # when discovery advertises /mcp as the resource. Treat root as a
+            # compatibility alias for the configured Streamable HTTP endpoint.
+            scope = {**scope, "path": self.mcp_path, "raw_path": self.mcp_path.encode("ascii")}
+            path = self.mcp_path
         headers = {
             key.decode("latin-1").lower(): value.decode("latin-1")
             for key, value in scope.get("headers", [])

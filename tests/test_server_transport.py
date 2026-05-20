@@ -106,6 +106,31 @@ def test_http_app_supports_options_preflight(monkeypatch) -> None:
     assert response.headers["access-control-allow-origin"] == "*"
 
 
+
+def test_http_app_treats_root_as_mcp_compat_alias(monkeypatch) -> None:
+    monkeypatch.setattr(server, "AUTH_TOKEN", "")
+    app = build_http_app()
+
+    initialize = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "test", "version": "0"},
+        },
+    }
+    with TestClient(app) as client:
+        response = client.post(
+            "/",
+            json=initialize,
+            headers={"Accept": "application/json, text/event-stream"},
+        )
+
+    assert response.status_code == 200
+    assert "protocolVersion" in response.text
+
 def test_http_app_exposes_server_card(monkeypatch) -> None:
     monkeypatch.setattr(server, "AUTH_TOKEN", "secret-token")
     app = build_http_app()

@@ -234,7 +234,9 @@ Then verify local and public metadata again. The metadata must show the new host
 
 5. **Testing only `/mcp`.** OAuth registration also requires both well-known metadata endpoints to return the same public host.
 
-6. **Leaking secrets while debugging.** Redact token values when printing `.env`, process args, or logs.
+6. **ChatGPT posts to `/` after OAuth.** If logs show `POST /` returning `404 Not Found` right after `POST /oauth/token 200 OK`, add or verify the root compatibility alias that rewrites `/` to `/mcp`.
+
+7. **Leaking secrets while debugging.** Redact token values when printing `.env`, process args, or logs.
 
 ## Verification Checklist
 
