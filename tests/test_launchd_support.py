@@ -171,6 +171,7 @@ def test_build_watchdog_launch_agent_runs_doctor_on_interval(tmp_path: Path) -> 
         "CHATGPT_MCP_DOCTOR_FAILURE_THRESHOLD": "3",
         "CHATGPT_MCP_DOCTOR_BASE_BACKOFF_SECONDS": "300",
         "CHATGPT_MCP_DOCTOR_MAX_BACKOFF_SECONDS": "3600",
+        "CHATGPT_MCP_PUBLIC_BASE_URL": "https://mcp.example.test",
     }
     assert payload["StandardOutPath"] == str(config.logs_dir / "watchdog.stdout.log")
     assert payload["StandardErrorPath"] == str(config.logs_dir / "watchdog.stderr.log")

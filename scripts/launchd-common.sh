@@ -149,6 +149,7 @@ prepare_launchd_env() {
   local override_doctor_base_backoff_seconds="${CHATGPT_MCP_DOCTOR_BASE_BACKOFF_SECONDS:-}"
   local override_doctor_max_backoff_seconds="${CHATGPT_MCP_DOCTOR_MAX_BACKOFF_SECONDS:-}"
   local override_label_prefix="${CHATGPT_MCP_LAUNCHD_LABEL_PREFIX:-}"
+  local override_external_cloudflared="${CHATGPT_MCP_EXTERNAL_CLOUDFLARED:-}"
   local override_launchd_dir="${CHATGPT_MCP_LAUNCHD_DIR:-}"
   local override_launchd_log_dir="${CHATGPT_MCP_LAUNCHD_LOG_DIR:-}"
   local override_launchd_path="${CHATGPT_MCP_LAUNCHD_PATH:-}"
@@ -175,6 +176,7 @@ prepare_launchd_env() {
   export CHATGPT_MCP_LAUNCHD_DIR="${override_launchd_dir:-${CHATGPT_MCP_LAUNCHD_DIR:-${HOME}/Library/LaunchAgents}}"
   export CHATGPT_MCP_LAUNCHD_LOG_DIR="${override_launchd_log_dir:-${CHATGPT_MCP_LAUNCHD_LOG_DIR:-${HOME}/Library/Logs/chatgpt-web-oauth-mcp}}"
   export CHATGPT_MCP_LAUNCHD_PATH="${override_launchd_path:-${CHATGPT_MCP_LAUNCHD_PATH:-${CURRENT_SHELL_PATH}}}"
+  export CHATGPT_MCP_EXTERNAL_CLOUDFLARED="${override_external_cloudflared:-${CHATGPT_MCP_EXTERNAL_CLOUDFLARED:-0}}"
 
   if [[ -n "${override_auth_token}" ]]; then
     export CHATGPT_MCP_AUTH_TOKEN="${override_auth_token}"

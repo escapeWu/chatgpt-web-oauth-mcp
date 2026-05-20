@@ -7,7 +7,15 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/launchd-common.sh"
 prepare_launchd_env
 require_command launchctl
 
-for label in "$(mcp_label)" "$(cloudflared_label)" "$(watchdog_label)"; do
+labels=("$(mcp_label)" "$(watchdog_label)")
+if [[ "${CHATGPT_MCP_EXTERNAL_CLOUDFLARED:-0}" != "1" ]]; then
+  labels=("$(mcp_label)" "$(cloudflared_label)" "$(watchdog_label)")
+else
+  echo "External cloudflared mode enabled; skipping managed cloudflared launchd status."
+  echo
+fi
+
+for label in "${labels[@]}"; do
   target="$(launchctl_target "${label}")"
   echo "=== ${target} ==="
   if launchctl print "${target}" >/tmp/chatgpt-web-oauth-mcp-launchctl.print 2>&1; then
@@ -26,16 +34,23 @@ else
   echo "Local /mcp is not reachable"
 fi
 
-if CLOUDFLARED_CONFIG="$(pick_cloudflared_config 2>/dev/null || true)"; then
+PUBLIC_URL=""
+if [[ -n "${CHATGPT_MCP_PUBLIC_BASE_URL:-}" ]]; then
+  PUBLIC_URL="${CHATGPT_MCP_PUBLIC_BASE_URL%/}/mcp"
+elif CLOUDFLARED_CONFIG="$(pick_cloudflared_config 2>/dev/null || true)"; then
   hostname=$(awk '/hostname:/{print $3; exit}' "${CLOUDFLARED_CONFIG}" 2>/dev/null || true)
   if [[ -n "${hostname}" ]]; then
-    echo
-    echo "=== public MCP ==="
-    if curl -fsSI --max-time 10 "https://${hostname}/mcp" >/dev/null 2>&1; then
-      curl -sSI --max-time 10 "https://${hostname}/mcp" | sed -n '1,12p'
-    else
-      echo "Public /mcp is not reachable at https://${hostname}/mcp"
-    fi
+    PUBLIC_URL="https://${hostname}/mcp"
+  fi
+fi
+
+if [[ -n "${PUBLIC_URL}" ]]; then
+  echo
+  echo "=== public MCP ==="
+  if curl -fsSI --max-time 10 "${PUBLIC_URL}" >/dev/null 2>&1; then
+    curl -sSI --max-time 10 "${PUBLIC_URL}" | sed -n '1,12p'
+  else
+    echo "Public /mcp is not reachable at ${PUBLIC_URL}"
   fi
 fi
 

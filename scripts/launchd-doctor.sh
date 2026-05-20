@@ -17,14 +17,14 @@ usage() {
   cat >&2 <<'USAGE'
 Usage: ./scripts/launchd-doctor.sh [--fix] [--quiet]
 
-Checks local /mcp and public cloudflared /mcp. With --fix, restarts only a
-failed layer after sustained failures. Public checks bypass local proxy env by
+Checks local /mcp and public /mcp. With --fix, restarts only a failed
+managed layer after sustained failures. Public checks bypass local proxy env by
 default; proxy reachability is logged only as diagnostic evidence.
 
 Auto-fix guardrails:
   - local /mcp down: restart mcp after sustained local failures
   - public /mcp down while local is healthy: restart cloudflared after sustained
-    public failures
+    public failures, unless CHATGPT_MCP_EXTERNAL_CLOUDFLARED=1
   - restarts use exponential backoff, capped by
     CHATGPT_MCP_DOCTOR_MAX_BACKOFF_SECONDS
 USAGE
@@ -64,6 +64,7 @@ MCP_TARGET="$(launchctl_target "${MCP_LABEL}")"
 CLOUDFLARED_TARGET="$(launchctl_target "${CLOUDFLARED_LABEL}")"
 LOCAL_URL="http://${CHATGPT_MCP_HOST}:${CHATGPT_MCP_PORT}/mcp"
 PUBLIC_URL=""
+EXTERNAL_CLOUDFLARED="${CHATGPT_MCP_EXTERNAL_CLOUDFLARED:-0}"
 
 log() {
   if [[ "${QUIET}" != "1" ]]; then
@@ -75,7 +76,9 @@ warn() {
   printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" >&2
 }
 
-if CLOUDFLARED_CONFIG="$(pick_cloudflared_config 2>/dev/null || true)"; then
+if [[ -n "${CHATGPT_MCP_PUBLIC_BASE_URL:-}" ]]; then
+  PUBLIC_URL="${CHATGPT_MCP_PUBLIC_BASE_URL%/}/mcp"
+elif CLOUDFLARED_CONFIG="$(pick_cloudflared_config 2>/dev/null || true)"; then
   hostname="$(awk '
     /hostname:/ {
       for (i = 1; i <= NF; i++) {
@@ -248,9 +251,13 @@ if ! service_loaded "${MCP_TARGET}"; then
   warn "MCP launchd service is not loaded: ${MCP_TARGET}"
   exit 1
 fi
-if ! service_loaded "${CLOUDFLARED_TARGET}"; then
-  warn "cloudflared launchd service is not loaded: ${CLOUDFLARED_TARGET}"
-  exit 1
+if [[ "${EXTERNAL_CLOUDFLARED}" != "1" ]]; then
+  if ! service_loaded "${CLOUDFLARED_TARGET}"; then
+    warn "cloudflared launchd service is not loaded: ${CLOUDFLARED_TARGET}"
+    exit 1
+  fi
+else
+  log "External cloudflared mode enabled; not checking managed cloudflared launchd service."
 fi
 
 log "=== local MCP ==="
@@ -293,6 +300,10 @@ fi
 save_state
 
 if [[ "${FIX}" == "1" ]]; then
+  if [[ "${EXTERNAL_CLOUDFLARED}" == "1" ]]; then
+    warn "External cloudflared mode enabled; public /mcp is not managed by this project, so cloudflared will not be restarted."
+    exit 1
+  fi
   maybe_restart_cloudflared || exit 1
   exit 0
 fi

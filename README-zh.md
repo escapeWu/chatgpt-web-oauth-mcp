@@ -121,6 +121,18 @@ chatgpt-web-oauth-mcp
 http://127.0.0.1:8766/mcp
 ```
 
+## 使用已有 Cloudflare Tunnel
+
+如果你已经自己运行了 `cloudflared`，并且公网域名已经指向 `http://127.0.0.1:8766`，不要让本项目再启动第二个 tunnel。正常配置 OAuth 和 public URL 后，只安装 MCP 服务即可：
+
+```bash
+CHATGPT_MCP_PUBLIC_BASE_URL="https://gpt.m5.imwsc.com"
+CHATGPT_MCP_EXTERNAL_CLOUDFLARED=1
+./scripts/install-launchd.sh --mcp-only
+```
+
+在 `--mcp-only` 模式下，本项目只安装和守护本地 MCP server，不会创建、启动、重启或监控 `cloudflared` launchd 服务。公网 HTTPS 路由仍由你已有的 Cloudflare Tunnel 负责。
+
 ## macOS launchd 常驻
 
 ```bash

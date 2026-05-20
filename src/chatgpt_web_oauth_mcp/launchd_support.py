@@ -152,6 +152,8 @@ def build_watchdog_launch_agent(
             "CHATGPT_MCP_DOCTOR_MAX_BACKOFF_SECONDS": config.env.get(
                 "CHATGPT_MCP_DOCTOR_MAX_BACKOFF_SECONDS"
             ),
+            "CHATGPT_MCP_PUBLIC_BASE_URL": config.env.get("CHATGPT_MCP_PUBLIC_BASE_URL"),
+            "CHATGPT_MCP_EXTERNAL_CLOUDFLARED": config.env.get("CHATGPT_MCP_EXTERNAL_CLOUDFLARED"),
         }.items()
         if value
     }

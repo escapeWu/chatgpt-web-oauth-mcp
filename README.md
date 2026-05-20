@@ -120,6 +120,18 @@ Local endpoint:
 http://127.0.0.1:8766/mcp
 ```
 
+## Existing Cloudflare Tunnel
+
+If you already run `cloudflared` yourself and your public hostname already routes to `http://127.0.0.1:8766`, do not let this project start a second tunnel. Configure OAuth normally, set the public URL, and install only the MCP service:
+
+```bash
+CHATGPT_MCP_PUBLIC_BASE_URL="https://gpt.m5.imwsc.com"
+CHATGPT_MCP_EXTERNAL_CLOUDFLARED=1
+./scripts/install-launchd.sh --mcp-only
+```
+
+In `--mcp-only` mode, this project installs and watches the local MCP server, but it does not create, bootstrap, restart, or monitor a `cloudflared` launchd service. Your existing Cloudflare Tunnel remains responsible for the public HTTPS route.
+
 ## Persistent macOS launchd install
 
 ```bash
