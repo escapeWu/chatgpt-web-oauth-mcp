@@ -125,7 +125,7 @@ http://127.0.0.1:8766/mcp
 If you already run `cloudflared` yourself and your public hostname already routes to `http://127.0.0.1:8766`, do not let this project start a second tunnel. Configure OAuth normally, set the public URL, and install only the MCP service:
 
 ```bash
-CHATGPT_MCP_PUBLIC_BASE_URL="https://gpt.m5.imwsc.com"
+CHATGPT_MCP_PUBLIC_BASE_URL="https://<your-existing-host>"
 CHATGPT_MCP_EXTERNAL_CLOUDFLARED=1
 ./scripts/install-launchd.sh --mcp-only
 ```

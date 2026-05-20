@@ -126,7 +126,7 @@ http://127.0.0.1:8766/mcp
 如果你已经自己运行了 `cloudflared`，并且公网域名已经指向 `http://127.0.0.1:8766`，不要让本项目再启动第二个 tunnel。正常配置 OAuth 和 public URL 后，只安装 MCP 服务即可：
 
 ```bash
-CHATGPT_MCP_PUBLIC_BASE_URL="https://gpt.m5.imwsc.com"
+CHATGPT_MCP_PUBLIC_BASE_URL="https://<your-existing-host>"
 CHATGPT_MCP_EXTERNAL_CLOUDFLARED=1
 ./scripts/install-launchd.sh --mcp-only
 ```
