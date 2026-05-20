@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from notion_local_ops_mcp.patching import apply_patch
+from chatgpt_web_oauth_mcp.patching import apply_patch
 
 
 def test_apply_patch_returns_candidates_when_context_missing(tmp_path: Path) -> None:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from notion_local_ops_mcp.server import server_info
+from chatgpt_web_oauth_mcp.server import server_info
 
 
 def _call() -> dict:
@@ -13,7 +13,7 @@ def _call() -> dict:
 def test_server_info_reports_metadata_and_tools() -> None:
     payload = _call()
     assert payload["success"] is True
-    assert payload["app_name"] == "notion-local-ops-mcp"
+    assert payload["app_name"] == "chatgpt-web-oauth-mcp"
     assert isinstance(payload["port"], int)
     assert isinstance(payload["workspace_root"], str)
     assert payload["auth"] in {"none", "shared_token", "oauth"}

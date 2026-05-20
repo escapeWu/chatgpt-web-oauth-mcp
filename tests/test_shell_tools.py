@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from notion_local_ops_mcp.shell import TIMEOUT_EXIT_CODE, run_command
+from chatgpt_web_oauth_mcp.shell import TIMEOUT_EXIT_CODE, run_command
 
 
 def test_run_command_returns_stdout_and_exit_code(tmp_path: Path) -> None:

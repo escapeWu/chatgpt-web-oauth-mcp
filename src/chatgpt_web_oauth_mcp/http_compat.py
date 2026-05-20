@@ -45,7 +45,7 @@ OAUTH_DISCOVERY_PATHS = {
 AuthTokenProvider = Callable[[], str]
 OAuthConfigProvider = Callable[[], OAuthRuntimeConfig]
 DebugEnabledProvider = Callable[[], bool]
-DEBUG_LOGGER = logging.getLogger("notion_local_ops_mcp.mcp_debug")
+DEBUG_LOGGER = logging.getLogger("chatgpt_web_oauth_mcp.mcp_debug")
 
 
 def _emit_debug_log(message: str, *args: object) -> None:
@@ -74,7 +74,7 @@ def _base_url_from_headers(headers: Headers, scheme: str = "https") -> str:
     # plain HTTP, so the header is the only way to learn the original scheme).
     # X-Forwarded-Host is intentionally NOT trusted: an attacker hitting the
     # tunnel with a spoofed value could otherwise redirect OAuth metadata to a
-    # phishing host. For safe issuer URLs, set NOTION_LOCAL_OPS_PUBLIC_BASE_URL.
+    # phishing host. For safe issuer URLs, set CHATGPT_MCP_PUBLIC_BASE_URL.
     forwarded_proto = headers.get("x-forwarded-proto", "").split(",", 1)[0].strip()
     proto = forwarded_proto or scheme
     host = headers.get("host", "").strip()

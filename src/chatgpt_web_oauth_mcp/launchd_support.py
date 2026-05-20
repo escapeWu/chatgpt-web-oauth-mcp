@@ -5,8 +5,8 @@ import plistlib
 from pathlib import Path
 from typing import Mapping, Any
 
-DEFAULT_LAUNCHD_LABEL_PREFIX = "com.notion-local-ops"
-DEFAULT_LAUNCHD_LOG_DIRNAME = "notion-local-ops-mcp"
+DEFAULT_LAUNCHD_LABEL_PREFIX = "com.chatgpt-web-oauth-mcp"
+DEFAULT_LAUNCHD_LOG_DIRNAME = "chatgpt-web-oauth-mcp"
 DEFAULT_MCP_MAX_FILES = 4096
 DEFAULT_WATCHDOG_INTERVAL_SECONDS = 60
 CLOUDFLARED_PROXY_ENV_KEYS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY")
@@ -71,7 +71,7 @@ def _base_launch_agent(
 
 
 def build_mcp_launch_agent(config: LaunchdServiceConfig) -> dict[str, Any]:
-    state_dir = Path(config.env["NOTION_LOCAL_OPS_STATE_DIR"])
+    state_dir = Path(config.env["CHATGPT_MCP_STATE_DIR"])
     environment = {
         key: value
         for key, value in config.env.items()
@@ -87,7 +87,7 @@ def build_mcp_launch_agent(config: LaunchdServiceConfig) -> dict[str, Any]:
         program_arguments=[
             str(config.python_bin),
             "-m",
-            "notion_local_ops_mcp.supervisor",
+            "chatgpt_web_oauth_mcp.supervisor",
             "--pid-file",
             str(state_dir / "launchd-supervisor.pid"),
             "--log-file",
@@ -137,20 +137,20 @@ def build_watchdog_launch_agent(
         key: value
         for key, value in {
             "PATH": config.env["PATH"],
-            "NOTION_LOCAL_OPS_HOST": config.env.get("NOTION_LOCAL_OPS_HOST"),
-            "NOTION_LOCAL_OPS_PORT": config.env.get("NOTION_LOCAL_OPS_PORT"),
-            "NOTION_LOCAL_OPS_STATE_DIR": config.env.get("NOTION_LOCAL_OPS_STATE_DIR"),
-            "NOTION_LOCAL_OPS_LAUNCHD_LABEL_PREFIX": config.label_prefix,
-            "NOTION_LOCAL_OPS_LAUNCHD_DIR": str(config.launch_agents_dir),
-            "NOTION_LOCAL_OPS_LAUNCHD_LOG_DIR": str(config.logs_dir),
-            "NOTION_LOCAL_OPS_DOCTOR_FAILURE_THRESHOLD": config.env.get(
-                "NOTION_LOCAL_OPS_DOCTOR_FAILURE_THRESHOLD"
+            "CHATGPT_MCP_HOST": config.env.get("CHATGPT_MCP_HOST"),
+            "CHATGPT_MCP_PORT": config.env.get("CHATGPT_MCP_PORT"),
+            "CHATGPT_MCP_STATE_DIR": config.env.get("CHATGPT_MCP_STATE_DIR"),
+            "CHATGPT_MCP_LAUNCHD_LABEL_PREFIX": config.label_prefix,
+            "CHATGPT_MCP_LAUNCHD_DIR": str(config.launch_agents_dir),
+            "CHATGPT_MCP_LAUNCHD_LOG_DIR": str(config.logs_dir),
+            "CHATGPT_MCP_DOCTOR_FAILURE_THRESHOLD": config.env.get(
+                "CHATGPT_MCP_DOCTOR_FAILURE_THRESHOLD"
             ),
-            "NOTION_LOCAL_OPS_DOCTOR_BASE_BACKOFF_SECONDS": config.env.get(
-                "NOTION_LOCAL_OPS_DOCTOR_BASE_BACKOFF_SECONDS"
+            "CHATGPT_MCP_DOCTOR_BASE_BACKOFF_SECONDS": config.env.get(
+                "CHATGPT_MCP_DOCTOR_BASE_BACKOFF_SECONDS"
             ),
-            "NOTION_LOCAL_OPS_DOCTOR_MAX_BACKOFF_SECONDS": config.env.get(
-                "NOTION_LOCAL_OPS_DOCTOR_MAX_BACKOFF_SECONDS"
+            "CHATGPT_MCP_DOCTOR_MAX_BACKOFF_SECONDS": config.env.get(
+                "CHATGPT_MCP_DOCTOR_MAX_BACKOFF_SECONDS"
             ),
         }.items()
         if value

@@ -4,8 +4,8 @@ import asyncio
 import json
 from pathlib import Path
 
-from notion_local_ops_mcp.executors import ExecutorRegistry
-from notion_local_ops_mcp.tasks import TaskStore
+from chatgpt_web_oauth_mcp.executors import ExecutorRegistry
+from chatgpt_web_oauth_mcp.tasks import TaskStore
 
 
 def _call(tool, *args, **kwargs):
@@ -17,7 +17,7 @@ def _call(tool, *args, **kwargs):
 
 
 def test_server_apply_patch_tool_updates_file(tmp_path: Path) -> None:
-    from notion_local_ops_mcp import server
+    from chatgpt_web_oauth_mcp import server
 
     target = tmp_path / "note.txt"
     target.write_text("hello\nworld\n", encoding="utf-8")
@@ -42,7 +42,7 @@ def test_server_apply_patch_tool_updates_file(tmp_path: Path) -> None:
 
 
 def test_server_run_command_can_dispatch_background_tasks(tmp_path: Path) -> None:
-    from notion_local_ops_mcp import server
+    from chatgpt_web_oauth_mcp import server
 
     server.registry = ExecutorRegistry(
         store=TaskStore(tmp_path / "state"),
@@ -66,7 +66,7 @@ def test_server_run_command_can_dispatch_background_tasks(tmp_path: Path) -> Non
 
 
 def test_server_read_text_tool_returns_multiple_file_results(tmp_path: Path) -> None:
-    from notion_local_ops_mcp import server
+    from chatgpt_web_oauth_mcp import server
 
     first = tmp_path / "one.txt"
     second = tmp_path / "two.txt"
@@ -81,7 +81,7 @@ def test_server_read_text_tool_returns_multiple_file_results(tmp_path: Path) -> 
 
 
 def test_server_search_tool_unifies_regex_text_and_glob(tmp_path: Path) -> None:
-    from notion_local_ops_mcp import server
+    from chatgpt_web_oauth_mcp import server
 
     first = tmp_path / "one.py"
     second = tmp_path / "two.txt"
@@ -112,7 +112,7 @@ def test_server_search_tool_unifies_regex_text_and_glob(tmp_path: Path) -> None:
 
 
 def test_server_read_text_supports_single_and_batch_modes(tmp_path: Path) -> None:
-    from notion_local_ops_mcp import server
+    from chatgpt_web_oauth_mcp import server
 
     first = tmp_path / "one.txt"
     second = tmp_path / "two.txt"
@@ -137,7 +137,7 @@ def test_server_read_text_supports_single_and_batch_modes(tmp_path: Path) -> Non
 
 
 def test_server_read_text_can_include_line_numbers(tmp_path: Path) -> None:
-    from notion_local_ops_mcp import server
+    from chatgpt_web_oauth_mcp import server
 
     first = tmp_path / "one.txt"
     first.write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
@@ -156,7 +156,7 @@ def test_server_read_text_can_include_line_numbers(tmp_path: Path) -> None:
 
 
 def test_server_read_text_requires_exactly_one_path_argument(tmp_path: Path) -> None:
-    from notion_local_ops_mcp import server
+    from chatgpt_web_oauth_mcp import server
 
     both_missing = _call(server.read_text)
     both_present = _call(server.read_text, path="one.txt", paths=["two.txt"])
@@ -168,7 +168,7 @@ def test_server_read_text_requires_exactly_one_path_argument(tmp_path: Path) -> 
 
 
 def test_server_search_validates_mode_and_required_fields(tmp_path: Path) -> None:
-    from notion_local_ops_mcp import server
+    from chatgpt_web_oauth_mcp import server
 
     invalid_mode = _call(server.search, mode="unknown", path=str(tmp_path))
     missing_regex_pattern = _call(server.search, mode="regex", path=str(tmp_path))
@@ -183,7 +183,7 @@ def test_server_search_validates_mode_and_required_fields(tmp_path: Path) -> Non
 
 
 def test_server_search_supports_single_file_path_for_text_and_regex(tmp_path: Path) -> None:
-    from notion_local_ops_mcp import server
+    from chatgpt_web_oauth_mcp import server
 
     target = tmp_path / "one.py"
     target.write_text("alpha\nTODO: fix me\n", encoding="utf-8")
@@ -203,7 +203,7 @@ def test_server_search_supports_single_file_path_for_text_and_regex(tmp_path: Pa
 
 
 def test_server_delegate_task_accepts_structured_fields(tmp_path: Path) -> None:
-    from notion_local_ops_mcp import server
+    from chatgpt_web_oauth_mcp import server
 
     server.registry = ExecutorRegistry(
         store=TaskStore(tmp_path / "state"),
@@ -229,7 +229,7 @@ def test_server_delegate_task_accepts_structured_fields(tmp_path: Path) -> None:
 
 
 def test_server_run_command_stream_returns_task_polling_hint(tmp_path: Path) -> None:
-    from notion_local_ops_mcp import server
+    from chatgpt_web_oauth_mcp import server
 
     old_registry = server.registry
     try:
@@ -256,7 +256,7 @@ def test_server_run_command_stream_returns_task_polling_hint(tmp_path: Path) -> 
 
 
 def test_server_purge_tasks_dry_run_reports_candidates(tmp_path: Path) -> None:
-    from notion_local_ops_mcp import server
+    from chatgpt_web_oauth_mcp import server
 
     old_store = server.store
     old_registry = server.registry
@@ -285,7 +285,7 @@ def test_server_purge_tasks_dry_run_reports_candidates(tmp_path: Path) -> None:
 
 
 def test_server_apply_patch_tool_description_uses_generic_patch_language() -> None:
-    from notion_local_ops_mcp import server
+    from chatgpt_web_oauth_mcp import server
 
     async def scenario() -> str:
         list_tools = getattr(server.mcp, "_list_tools")
@@ -303,7 +303,7 @@ def test_server_apply_patch_tool_description_uses_generic_patch_language() -> No
 
 
 def test_server_tools_expose_chatgpt_compatible_annotations() -> None:
-    from notion_local_ops_mcp import server
+    from chatgpt_web_oauth_mcp import server
 
     async def scenario() -> dict[str, dict[str, object]]:
         list_tools = getattr(server.mcp, "_list_tools")

@@ -1,7 +1,7 @@
 import subprocess
 from pathlib import Path
 
-from notion_local_ops_mcp.search import glob_files, grep_files, search_files
+from chatgpt_web_oauth_mcp.search import glob_files, grep_files, search_files
 
 
 def test_search_files_finds_text_matches(tmp_path: Path) -> None:

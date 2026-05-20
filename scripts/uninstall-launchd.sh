@@ -15,4 +15,4 @@ for label in "$(watchdog_label)" "$(mcp_label)" "$(cloudflared_label)"; do
   echo "Removed ${target} (${plist_path})"
 done
 
-echo "Launchd services removed. Logs remain under ${NOTION_LOCAL_OPS_LAUNCHD_LOG_DIR}."
+echo "Launchd services removed. Logs remain under ${CHATGPT_MCP_LAUNCHD_LOG_DIR}."

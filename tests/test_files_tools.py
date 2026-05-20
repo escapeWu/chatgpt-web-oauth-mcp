@@ -1,8 +1,8 @@
 import subprocess
 from pathlib import Path
 
-from notion_local_ops_mcp.files import list_files, read_file, read_files, replace_in_file, write_file
-from notion_local_ops_mcp.pathing import resolve_path
+from chatgpt_web_oauth_mcp.files import list_files, read_file, read_files, replace_in_file, write_file
+from chatgpt_web_oauth_mcp.pathing import resolve_path
 
 
 def test_resolve_path_uses_workspace_root_for_relative_paths(tmp_path: Path) -> None:

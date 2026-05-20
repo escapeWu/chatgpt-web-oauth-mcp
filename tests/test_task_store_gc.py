@@ -4,7 +4,7 @@ import json
 import stat
 from pathlib import Path
 
-from notion_local_ops_mcp.tasks import TaskStore
+from chatgpt_web_oauth_mcp.tasks import TaskStore
 
 
 def _force_old_updated_at(store: TaskStore, task_id: str) -> None:

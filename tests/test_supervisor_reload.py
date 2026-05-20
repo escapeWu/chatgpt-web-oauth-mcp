@@ -57,19 +57,19 @@ def test_supervisor_reload_keeps_mcp_endpoint_available(tmp_path: Path) -> None:
     env["PYTHONPATH"] = str(repo_root / "src") if not existing_pythonpath else f"{repo_root / 'src'}{os.pathsep}{existing_pythonpath}"
     env.update(
         {
-            "NOTION_LOCAL_OPS_HOST": "127.0.0.1",
-            "NOTION_LOCAL_OPS_PORT": str(port),
-            "NOTION_LOCAL_OPS_WORKSPACE_ROOT": str(tmp_path),
-            "NOTION_LOCAL_OPS_STATE_DIR": str(state_dir),
-            "NOTION_LOCAL_OPS_AUTH_TOKEN": "",
-            "NOTION_LOCAL_OPS_GRACEFUL_SHUTDOWN_SECONDS": "5",
+            "CHATGPT_MCP_HOST": "127.0.0.1",
+            "CHATGPT_MCP_PORT": str(port),
+            "CHATGPT_MCP_WORKSPACE_ROOT": str(tmp_path),
+            "CHATGPT_MCP_STATE_DIR": str(state_dir),
+            "CHATGPT_MCP_AUTH_TOKEN": "",
+            "CHATGPT_MCP_GRACEFUL_SHUTDOWN_SECONDS": "5",
         }
     )
     proc = subprocess.Popen(
         [
             _python_for_subprocess(repo_root),
             "-m",
-            "notion_local_ops_mcp.supervisor",
+            "chatgpt_web_oauth_mcp.supervisor",
             "--pid-file",
             str(pid_file),
             "--log-file",

@@ -15,7 +15,7 @@ from .config import APP_NAME, GRACEFUL_SHUTDOWN_SECONDS, HOST, PORT, STATE_DIR, 
 
 SUPERVISOR_PID_FILENAME = "dev-tunnel-supervisor.pid"
 DEFAULT_READY_TIMEOUT_SECONDS = float(
-    os.environ.get("NOTION_LOCAL_OPS_RELOAD_READY_TIMEOUT_SECONDS", "15")
+    os.environ.get("CHATGPT_MCP_RELOAD_READY_TIMEOUT_SECONDS", "15")
 )
 
 
@@ -101,11 +101,11 @@ def _spawn_server(
     ready_read_fd, ready_write_fd = os.pipe()
     os.set_inheritable(ready_write_fd, True)
     env = os.environ.copy()
-    env["NOTION_LOCAL_OPS_READY_FD"] = str(ready_write_fd)
+    env["CHATGPT_MCP_READY_FD"] = str(ready_write_fd)
     command = [
         sys.executable,
         "-m",
-        "notion_local_ops_mcp.server",
+        "chatgpt_web_oauth_mcp.server",
         "--fd",
         str(listener_fd),
     ]
@@ -241,7 +241,7 @@ class RollingServerSupervisor:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run notion-local-ops-mcp behind a rolling-reload supervisor."
+        description="Run chatgpt-web-oauth-mcp behind a rolling-reload supervisor."
     )
     parser.add_argument(
         "--pid-file",

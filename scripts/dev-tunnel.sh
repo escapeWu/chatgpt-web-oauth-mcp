@@ -22,17 +22,17 @@ Environment loading order:
 2. Current shell environment overrides matching keys
 
 Required for start:
-- NOTION_LOCAL_OPS_AUTH_TOKEN
+- CHATGPT_MCP_AUTH_TOKEN
 
 Optional:
-- NOTION_LOCAL_OPS_WORKSPACE_ROOT (defaults to repo root)
-- NOTION_LOCAL_OPS_HOST (defaults to 127.0.0.1)
-- NOTION_LOCAL_OPS_PORT (defaults to 8766)
-- NOTION_LOCAL_OPS_STATE_DIR (defaults to ~/.notion-local-ops-mcp)
-- NOTION_LOCAL_OPS_CLOUDFLARED_CONFIG (named tunnel config path)
-- NOTION_LOCAL_OPS_TUNNEL_NAME (optional override for cloudflared tunnel run)
-- NOTION_LOCAL_OPS_DEBUG_MCP_LOGGING (set to 1/true/on to log MCP methods/tools)
-- NOTION_LOCAL_OPS_GRACEFUL_SHUTDOWN_SECONDS (drain time during rolling reload; default 30)
+- CHATGPT_MCP_WORKSPACE_ROOT (defaults to repo root)
+- CHATGPT_MCP_HOST (defaults to 127.0.0.1)
+- CHATGPT_MCP_PORT (defaults to 8766)
+- CHATGPT_MCP_STATE_DIR (defaults to ~/.chatgpt-web-oauth-mcp)
+- CHATGPT_MCP_CLOUDFLARED_CONFIG (named tunnel config path)
+- CHATGPT_MCP_TUNNEL_NAME (optional override for cloudflared tunnel run)
+- CHATGPT_MCP_DEBUG_MCP_LOGGING (set to 1/true/on to log MCP methods/tools)
+- CHATGPT_MCP_GRACEFUL_SHUTDOWN_SECONDS (drain time during rolling reload; default 30)
 
 If ./cloudflared.local.yml or ./cloudflared.local.yaml exists, this script
 uses that named tunnel config automatically. Otherwise it falls back to a
@@ -80,8 +80,8 @@ resolve_path() {
 pick_cloudflared_config() {
   local candidate
 
-  if [[ -n "${NOTION_LOCAL_OPS_CLOUDFLARED_CONFIG:-}" ]]; then
-    resolve_path "${NOTION_LOCAL_OPS_CLOUDFLARED_CONFIG}"
+  if [[ -n "${CHATGPT_MCP_CLOUDFLARED_CONFIG:-}" ]]; then
+    resolve_path "${CHATGPT_MCP_CLOUDFLARED_CONFIG}"
     return 0
   fi
 
@@ -104,8 +104,8 @@ import socket
 import sys
 import time
 
-host = os.environ["NOTION_LOCAL_OPS_HOST"]
-port = int(os.environ["NOTION_LOCAL_OPS_PORT"])
+host = os.environ["CHATGPT_MCP_HOST"]
+port = int(os.environ["CHATGPT_MCP_PORT"])
 
 deadline = time.time() + 15
 while time.time() < deadline:
@@ -158,9 +158,9 @@ print_status() {
     echo "Supervisor not running"
   fi
 
-  echo "Endpoint: http://${NOTION_LOCAL_OPS_HOST}:${NOTION_LOCAL_OPS_PORT}/mcp"
+  echo "Endpoint: http://${CHATGPT_MCP_HOST}:${CHATGPT_MCP_PORT}/mcp"
   if command -v curl >/dev/null 2>&1; then
-    if curl -fsSI "http://${NOTION_LOCAL_OPS_HOST}:${NOTION_LOCAL_OPS_PORT}/mcp" >/dev/null 2>&1; then
+    if curl -fsSI "http://${CHATGPT_MCP_HOST}:${CHATGPT_MCP_PORT}/mcp" >/dev/null 2>&1; then
       echo "Local MCP endpoint is reachable"
     else
       echo "Local MCP endpoint is not reachable"
@@ -190,65 +190,65 @@ fi
 
 PYTHON_BIN="$(pick_python)"
 
-OVERRIDE_HOST="${NOTION_LOCAL_OPS_HOST:-}"
-OVERRIDE_PORT="${NOTION_LOCAL_OPS_PORT:-}"
-OVERRIDE_WORKSPACE_ROOT="${NOTION_LOCAL_OPS_WORKSPACE_ROOT:-}"
-OVERRIDE_STATE_DIR="${NOTION_LOCAL_OPS_STATE_DIR:-}"
-OVERRIDE_AUTH_TOKEN="${NOTION_LOCAL_OPS_AUTH_TOKEN:-}"
-OVERRIDE_CLOUDFLARED_CONFIG="${NOTION_LOCAL_OPS_CLOUDFLARED_CONFIG:-}"
-OVERRIDE_TUNNEL_NAME="${NOTION_LOCAL_OPS_TUNNEL_NAME:-}"
-OVERRIDE_CODEX_COMMAND="${NOTION_LOCAL_OPS_CODEX_COMMAND:-}"
-OVERRIDE_CLAUDE_COMMAND="${NOTION_LOCAL_OPS_CLAUDE_COMMAND:-}"
-OVERRIDE_COMMAND_TIMEOUT="${NOTION_LOCAL_OPS_COMMAND_TIMEOUT:-}"
-OVERRIDE_DELEGATE_TIMEOUT="${NOTION_LOCAL_OPS_DELEGATE_TIMEOUT:-}"
-OVERRIDE_DEBUG_MCP_LOGGING="${NOTION_LOCAL_OPS_DEBUG_MCP_LOGGING:-}"
-OVERRIDE_GRACEFUL_SHUTDOWN_SECONDS="${NOTION_LOCAL_OPS_GRACEFUL_SHUTDOWN_SECONDS:-}"
+OVERRIDE_HOST="${CHATGPT_MCP_HOST:-}"
+OVERRIDE_PORT="${CHATGPT_MCP_PORT:-}"
+OVERRIDE_WORKSPACE_ROOT="${CHATGPT_MCP_WORKSPACE_ROOT:-}"
+OVERRIDE_STATE_DIR="${CHATGPT_MCP_STATE_DIR:-}"
+OVERRIDE_AUTH_TOKEN="${CHATGPT_MCP_AUTH_TOKEN:-}"
+OVERRIDE_CLOUDFLARED_CONFIG="${CHATGPT_MCP_CLOUDFLARED_CONFIG:-}"
+OVERRIDE_TUNNEL_NAME="${CHATGPT_MCP_TUNNEL_NAME:-}"
+OVERRIDE_CODEX_COMMAND="${CHATGPT_MCP_CODEX_COMMAND:-}"
+OVERRIDE_CLAUDE_COMMAND="${CHATGPT_MCP_CLAUDE_COMMAND:-}"
+OVERRIDE_COMMAND_TIMEOUT="${CHATGPT_MCP_COMMAND_TIMEOUT:-}"
+OVERRIDE_DELEGATE_TIMEOUT="${CHATGPT_MCP_DELEGATE_TIMEOUT:-}"
+OVERRIDE_DEBUG_MCP_LOGGING="${CHATGPT_MCP_DEBUG_MCP_LOGGING:-}"
+OVERRIDE_GRACEFUL_SHUTDOWN_SECONDS="${CHATGPT_MCP_GRACEFUL_SHUTDOWN_SECONDS:-}"
 
 load_env_file
 
-export NOTION_LOCAL_OPS_HOST="${OVERRIDE_HOST:-${NOTION_LOCAL_OPS_HOST:-127.0.0.1}}"
-export NOTION_LOCAL_OPS_PORT="${OVERRIDE_PORT:-${NOTION_LOCAL_OPS_PORT:-8766}}"
-export NOTION_LOCAL_OPS_WORKSPACE_ROOT="${OVERRIDE_WORKSPACE_ROOT:-${NOTION_LOCAL_OPS_WORKSPACE_ROOT:-${ROOT_DIR}}}"
-export NOTION_LOCAL_OPS_STATE_DIR="${OVERRIDE_STATE_DIR:-${NOTION_LOCAL_OPS_STATE_DIR:-${HOME}/.notion-local-ops-mcp}}"
+export CHATGPT_MCP_HOST="${OVERRIDE_HOST:-${CHATGPT_MCP_HOST:-127.0.0.1}}"
+export CHATGPT_MCP_PORT="${OVERRIDE_PORT:-${CHATGPT_MCP_PORT:-8766}}"
+export CHATGPT_MCP_WORKSPACE_ROOT="${OVERRIDE_WORKSPACE_ROOT:-${CHATGPT_MCP_WORKSPACE_ROOT:-${ROOT_DIR}}}"
+export CHATGPT_MCP_STATE_DIR="${OVERRIDE_STATE_DIR:-${CHATGPT_MCP_STATE_DIR:-${HOME}/.chatgpt-web-oauth-mcp}}"
 
 if [[ -n "${OVERRIDE_AUTH_TOKEN}" ]]; then
-  export NOTION_LOCAL_OPS_AUTH_TOKEN="${OVERRIDE_AUTH_TOKEN}"
+  export CHATGPT_MCP_AUTH_TOKEN="${OVERRIDE_AUTH_TOKEN}"
 fi
 
 if [[ -n "${OVERRIDE_CLOUDFLARED_CONFIG}" ]]; then
-  export NOTION_LOCAL_OPS_CLOUDFLARED_CONFIG="${OVERRIDE_CLOUDFLARED_CONFIG}"
+  export CHATGPT_MCP_CLOUDFLARED_CONFIG="${OVERRIDE_CLOUDFLARED_CONFIG}"
 fi
 
 if [[ -n "${OVERRIDE_TUNNEL_NAME}" ]]; then
-  export NOTION_LOCAL_OPS_TUNNEL_NAME="${OVERRIDE_TUNNEL_NAME}"
+  export CHATGPT_MCP_TUNNEL_NAME="${OVERRIDE_TUNNEL_NAME}"
 fi
 
 if [[ -n "${OVERRIDE_CODEX_COMMAND}" ]]; then
-  export NOTION_LOCAL_OPS_CODEX_COMMAND="${OVERRIDE_CODEX_COMMAND}"
+  export CHATGPT_MCP_CODEX_COMMAND="${OVERRIDE_CODEX_COMMAND}"
 fi
 
 if [[ -n "${OVERRIDE_CLAUDE_COMMAND}" ]]; then
-  export NOTION_LOCAL_OPS_CLAUDE_COMMAND="${OVERRIDE_CLAUDE_COMMAND}"
+  export CHATGPT_MCP_CLAUDE_COMMAND="${OVERRIDE_CLAUDE_COMMAND}"
 fi
 
 if [[ -n "${OVERRIDE_COMMAND_TIMEOUT}" ]]; then
-  export NOTION_LOCAL_OPS_COMMAND_TIMEOUT="${OVERRIDE_COMMAND_TIMEOUT}"
+  export CHATGPT_MCP_COMMAND_TIMEOUT="${OVERRIDE_COMMAND_TIMEOUT}"
 fi
 
 if [[ -n "${OVERRIDE_DELEGATE_TIMEOUT}" ]]; then
-  export NOTION_LOCAL_OPS_DELEGATE_TIMEOUT="${OVERRIDE_DELEGATE_TIMEOUT}"
+  export CHATGPT_MCP_DELEGATE_TIMEOUT="${OVERRIDE_DELEGATE_TIMEOUT}"
 fi
 
 if [[ -n "${OVERRIDE_DEBUG_MCP_LOGGING}" ]]; then
-  export NOTION_LOCAL_OPS_DEBUG_MCP_LOGGING="${OVERRIDE_DEBUG_MCP_LOGGING}"
+  export CHATGPT_MCP_DEBUG_MCP_LOGGING="${OVERRIDE_DEBUG_MCP_LOGGING}"
 fi
 
 if [[ -n "${OVERRIDE_GRACEFUL_SHUTDOWN_SECONDS}" ]]; then
-  export NOTION_LOCAL_OPS_GRACEFUL_SHUTDOWN_SECONDS="${OVERRIDE_GRACEFUL_SHUTDOWN_SECONDS}"
+  export CHATGPT_MCP_GRACEFUL_SHUTDOWN_SECONDS="${OVERRIDE_GRACEFUL_SHUTDOWN_SECONDS}"
 fi
 
-SUPERVISOR_PID_FILE="${NOTION_LOCAL_OPS_STATE_DIR}/dev-tunnel-supervisor.pid"
-SERVER_LOG="$(ls -1t ${TMPDIR:-/tmp}/notion-local-ops-mcp-server.*.log 2>/dev/null | head -n1 || true)"
+SUPERVISOR_PID_FILE="${CHATGPT_MCP_STATE_DIR}/dev-tunnel-supervisor.pid"
+SERVER_LOG="$(ls -1t ${TMPDIR:-/tmp}/chatgpt-web-oauth-mcp-server.*.log 2>/dev/null | head -n1 || true)"
 
 case "${ACTION}" in
   reload)
@@ -280,8 +280,8 @@ source "${ROOT_DIR}/.venv/bin/activate"
 
 ensure_python_runtime_deps
 
-if [[ -z "${NOTION_LOCAL_OPS_AUTH_TOKEN:-}" ]]; then
-  echo "Missing NOTION_LOCAL_OPS_AUTH_TOKEN. Set it in .env or export it before running." >&2
+if [[ -z "${CHATGPT_MCP_AUTH_TOKEN:-}" ]]; then
+  echo "Missing CHATGPT_MCP_AUTH_TOKEN. Set it in .env or export it before running." >&2
   exit 1
 fi
 
@@ -291,11 +291,11 @@ if pid="$(supervisor_running)"; then
   exit 1
 fi
 
-SERVER_URL="http://${NOTION_LOCAL_OPS_HOST}:${NOTION_LOCAL_OPS_PORT}"
-SERVER_LOG="${TMPDIR:-/tmp}/notion-local-ops-mcp-server.$$.log"
+SERVER_URL="http://${CHATGPT_MCP_HOST}:${CHATGPT_MCP_PORT}"
+SERVER_LOG="${TMPDIR:-/tmp}/chatgpt-web-oauth-mcp-server.$$.log"
 
-echo "Starting notion-local-ops-mcp supervisor..."
-python -m notion_local_ops_mcp.supervisor \
+echo "Starting chatgpt-web-oauth-mcp supervisor..."
+python -m chatgpt_web_oauth_mcp.supervisor \
   --pid-file "${SUPERVISOR_PID_FILE}" \
   --log-file "${SERVER_LOG}" &
 SUPERVISOR_PID=$!
@@ -307,8 +307,8 @@ if ! wait_for_server; then
 fi
 
 echo "MCP endpoint: ${SERVER_URL}/mcp"
-echo "Workspace root: ${NOTION_LOCAL_OPS_WORKSPACE_ROOT}"
-echo "State dir: ${NOTION_LOCAL_OPS_STATE_DIR}"
+echo "Workspace root: ${CHATGPT_MCP_WORKSPACE_ROOT}"
+echo "State dir: ${CHATGPT_MCP_STATE_DIR}"
 echo "Supervisor pid: ${SUPERVISOR_PID}"
 echo "Supervisor pid file: ${SUPERVISOR_PID_FILE}"
 echo "Server log: ${SERVER_LOG}"
@@ -323,8 +323,8 @@ if CLOUDFLARED_CONFIG="$(pick_cloudflared_config)"; then
   echo "Starting named cloudflared tunnel. Press Ctrl+C to stop both processes."
   echo "cloudflared config: ${CLOUDFLARED_CONFIG}"
 
-  if [[ -n "${NOTION_LOCAL_OPS_TUNNEL_NAME:-}" ]]; then
-    cloudflared tunnel --config "${CLOUDFLARED_CONFIG}" run "${NOTION_LOCAL_OPS_TUNNEL_NAME}"
+  if [[ -n "${CHATGPT_MCP_TUNNEL_NAME:-}" ]]; then
+    cloudflared tunnel --config "${CLOUDFLARED_CONFIG}" run "${CHATGPT_MCP_TUNNEL_NAME}"
   else
     cloudflared tunnel --config "${CLOUDFLARED_CONFIG}" run
   fi

@@ -13,8 +13,8 @@ import uvicorn
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
-from notion_local_ops_mcp.executors import ExecutorRegistry
-from notion_local_ops_mcp.tasks import TaskStore
+from chatgpt_web_oauth_mcp.executors import ExecutorRegistry
+from chatgpt_web_oauth_mcp.tasks import TaskStore
 
 
 def _find_free_port() -> int:
@@ -32,7 +32,7 @@ def _running_server(
     codex_command: str = "python -c \"print('codex')\"",
     claude_command: str = "python -c \"print('claude')\"",
 ):
-    from notion_local_ops_mcp import server
+    from chatgpt_web_oauth_mcp import server
 
     monkeypatch.setattr(server, "AUTH_TOKEN", auth_token)
     monkeypatch.setattr(server, "WORKSPACE_ROOT", tmp_path)

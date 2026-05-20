@@ -1,33 +1,35 @@
-# AGENTS.md — notion-local-ops-mcp
+# AGENTS.md — chatgpt-web-oauth-mcp
 
 ## What is this?
 
-A local MCP (Model Context Protocol) server that gives Notion AI agents the ability to operate on your local filesystem and shell. Built with **Python 3.11+** and **FastMCP**, served over SSE on `http://127.0.0.1:8766/mcp`.
+A local MCP (Model Context Protocol) server that lets ChatGPT Web call local filesystem, shell, git, and delegated coding tools through an HTTPS MCP endpoint with OAuth. Built with Python 3.11+ and FastMCP. Local endpoint: `http://127.0.0.1:8766/mcp`.
 
 ## Architecture
 
-```
-Notion Agent ──SSE──▶ FastMCP Server (uvicorn)
-                          │
-          ┌───────────────┼───────────────┐
-          ▼               ▼               ▼
-    Direct Tools     Shell Tool     Delegate Tasks
-   (files/search)   (run_command)  (codex/claude-code)
+```text
+ChatGPT Web ──OAuth + HTTPS──▶ FastMCP Server (uvicorn)
+                                  │
+                  ┌───────────────┼───────────────┐
+                  ▼               ▼               ▼
+            Direct Tools     Shell Tool     Delegate Tasks
+           (files/search)   (run_command)  (codex/claude-code)
 ```
 
-### Source layout
+## Source layout
 
-```
-src/notion_local_ops_mcp/
+```text
+src/chatgpt_web_oauth_mcp/
 ├── server.py      # FastMCP app, tool registration, uvicorn entrypoint / fd-aware child
-├── config.py      # All env-var driven settings (host, port, paths, timeouts…)
-├── pathing.py     # Path resolution: relative → absolute under WORKSPACE_ROOT
-├── files.py       # list_files, read_text, write_file, internal replace helpers
-├── search.py      # search implementations (glob/regex/text)
-├── shell.py       # run_command — subprocess with timeout
-├── tasks.py       # TaskStore — persistent task metadata & logs on disk
-├── executors.py   # ExecutorRegistry — async delegate_task via codex / claude-code
-└── supervisor.py  # Rolling-reload supervisor for dev-tunnel / local hot restarts
+├── config.py      # Env-var driven settings
+├── oauth.py       # OAuth dynamic registration, PKCE, token store, metadata
+├── http_compat.py # ChatGPT-compatible HTTP/OAuth/MCP compatibility layer
+├── pathing.py     # Path resolution: relative -> absolute under WORKSPACE_ROOT
+├── files.py       # list_files, read_text, write_file
+├── search.py      # glob/regex/text search implementations
+├── shell.py       # run_command subprocess helper
+├── tasks.py       # Persistent task metadata and logs
+├── executors.py   # async delegate_task via codex / claude-code
+└── supervisor.py  # rolling-reload supervisor for tunnels / launchd
 ```
 
 ## Tools exposed
@@ -36,55 +38,37 @@ src/notion_local_ops_mcp/
 |---|---|
 | `server_info` | Inspect runtime config and available MCP tools |
 | `set_default_cwd` / `get_default_cwd` | Manage session default working directory |
-| `list_files` | List directory contents (flat or recursive) |
-| `search` | Canonical unified query tool (glob/regex/text); hides hidden and `.gitignore`d paths by default and supports regex/text against a single file |
-| `read_text` | Canonical single/batch text reader with line pagination and optional line numbers |
-| `write_file` | Create or overwrite a file (`dry_run` supported) |
-| `apply_patch` | Default edit tool for existing files; rejects pure-context hunks, requires unique matches, and supports validation/dry-run |
-| `git_status` / `git_diff` / `git_commit` / `git_log` / `git_show` / `git_blame` | Structured git workflows (when cwd is actually inside a git repo) |
-| `run_command` | Execute a shell command (sync or background) |
-| `run_command_stream` | Start long shell command and poll via task id |
-| `delegate_task` | Submit long-running task to codex/claude-code with optional structured output parsing |
-| `get_task` / `wait_task` | Poll or block on delegated/background task completion |
-| `cancel_task` | Cancel a running delegated task |
+| `list_files` | List directory contents |
+| `search` | Glob, regex, or literal text search |
+| `read_text` | Single/batch text reader with pagination |
+| `write_file` | Create or overwrite a file, with dry-run support |
+| `apply_patch` | Structured patch editing for existing files |
+| `git_status` / `git_diff` / `git_commit` / `git_log` / `git_show` / `git_blame` | Structured git workflows |
+| `run_command` / `run_command_stream` | Execute shell commands |
+| `delegate_task` | Submit long-running tasks to codex/claude-code |
+| `get_task` / `wait_task` / `cancel_task` | Manage delegated/background tasks |
 | `purge_tasks` | GC old task logs under `STATE_DIR/tasks` |
 
 ## Key concepts
 
-- **WORKSPACE_ROOT** — Relative-path anchor and default cwd only (not a sandbox boundary). Set via `NOTION_LOCAL_OPS_WORKSPACE_ROOT`; defaults to `$HOME`.
-- **Bearer auth** — Optional `NOTION_LOCAL_OPS_AUTH_TOKEN`; if set, every request must include a matching `Authorization: Bearer <token>` header.
-- **Delegate executors** — `delegate_task` spawns a background thread running either OpenAI Codex CLI or Claude Code CLI. The executor is chosen automatically (`auto`) or explicitly (`codex` / `claude-code`). Task state is persisted under `STATE_DIR/tasks/<id>/`.
-- **Safety** — `apply_patch`/`write_file` are the public write surface. `read_text` caps output at 200 lines / 32 KB, supports optional numbered lines for evidence output, and binary files are rejected.
+- `WORKSPACE_ROOT` is a default cwd / relative-path anchor, not a sandbox boundary. Set it with `CHATGPT_MCP_WORKSPACE_ROOT`.
+- OAuth mode is enabled with `CHATGPT_MCP_AUTH_MODE=oauth`.
+- `CHATGPT_MCP_PUBLIC_BASE_URL` must be set in OAuth mode so issuer and resource URLs are stable and not Host-header-derived.
+- Prefer separate `CHATGPT_MCP_AUTH_TOKEN` and `CHATGPT_MCP_OAUTH_LOGIN_TOKEN` values.
+- Task state is persisted under `CHATGPT_MCP_STATE_DIR`.
 
-## Configuration (env vars)
+## Development rules
 
-| Variable | Default | Description |
-|---|---|---|
-| `NOTION_LOCAL_OPS_HOST` | `127.0.0.1` | Bind address |
-| `NOTION_LOCAL_OPS_PORT` | `8766` | Bind port |
-| `NOTION_LOCAL_OPS_WORKSPACE_ROOT` | `$HOME` | Root for relative path resolution |
-| `NOTION_LOCAL_OPS_STATE_DIR` | `~/.notion-local-ops-mcp` | Persistent task metadata |
-| `NOTION_LOCAL_OPS_AUTH_TOKEN` | *(empty)* | Bearer token (auth disabled if empty) |
-| `NOTION_LOCAL_OPS_CODEX_COMMAND` | `codex` | Codex CLI binary |
-| `NOTION_LOCAL_OPS_CLAUDE_COMMAND` | `claude` | Claude Code CLI binary |
-| `NOTION_LOCAL_OPS_COMMAND_TIMEOUT` | `120` | Default shell command timeout (seconds) |
-| `NOTION_LOCAL_OPS_DELEGATE_TIMEOUT` | `1800` | Default delegate task timeout (seconds) |
-| `NOTION_LOCAL_OPS_DEBUG_MCP_LOGGING` | `0` | Enable verbose MCP method/tool logging for handshake/debug sessions |
-| `NOTION_LOCAL_OPS_GRACEFUL_SHUTDOWN_SECONDS` | `30` | Graceful drain window when the rolling-reload supervisor swaps child servers |
+- Keep this project ChatGPT Web / generic MCP focused; do not add product-specific workflow docs or screenshots.
+- Prefer `apply_patch` for existing-file edits and `write_file` for new or fully rewritten short files.
+- After code changes, run `pytest -q` and `python -m compileall src tests` when feasible.
+- Do not commit secrets, local tunnel configs, `.env`, venvs, logs, or task state.
 
 ## Quick start
 
 ```bash
-cp .env.example .env   # edit values
+cp .env.example .env
 python -m venv .venv && source .venv/bin/activate
-pip install -e .
-./scripts/dev-tunnel.sh
-# in another shell, use ./scripts/dev-tunnel.sh reload for rolling restarts
-```
-
-## Dev
-
-```bash
 pip install -e ".[dev]"
-pytest
+./scripts/dev-tunnel.sh
 ```

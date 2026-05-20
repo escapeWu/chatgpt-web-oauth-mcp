@@ -812,7 +812,7 @@ class _ReadySignalServer(uvicorn.Server):
 
 
 def _consume_ready_fd() -> int | None:
-    raw_value = os.environ.pop("NOTION_LOCAL_OPS_READY_FD", "").strip()
+    raw_value = os.environ.pop("CHATGPT_MCP_READY_FD", "").strip()
     if not raw_value:
         return None
     return int(raw_value)
@@ -831,7 +831,7 @@ def build_uvicorn_server(*, fd: int | None = None, ready_fd: int | None = None) 
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description="Run the notion-local-ops MCP server.")
+    parser = argparse.ArgumentParser(description="Run the chatgpt-web-oauth-mcp MCP server.")
     parser.add_argument("--fd", type=int, default=None, help="Inherited listening socket fd.")
     args = parser.parse_args(argv)
 
@@ -848,14 +848,14 @@ def main(argv: list[str] | None = None) -> None:
     if oauth_config.normalized_auth_mode == "oauth":
         if not oauth_config.public_base_url:
             print(
-                "WARNING: NOTION_LOCAL_OPS_PUBLIC_BASE_URL is not set; OAuth "
+                "WARNING: CHATGPT_MCP_PUBLIC_BASE_URL is not set; OAuth "
                 "metadata will fall back to the request Host header. Set it to "
                 "your public tunnel URL (e.g. https://mcp.example.com) so issuer "
                 "URLs cannot be spoofed."
             )
         if not oauth_config.oauth_login_token and oauth_config.auth_token:
             print(
-                "WARNING: NOTION_LOCAL_OPS_OAUTH_LOGIN_TOKEN is not set; "
+                "WARNING: CHATGPT_MCP_OAUTH_LOGIN_TOKEN is not set; "
                 "AUTH_TOKEN is being reused as the OAuth login token. Anyone "
                 "with AUTH_TOKEN can mint long-TTL OAuth access tokens. After "
                 "rotating AUTH_TOKEN, also clear oauth.json[\"tokens\"] under "

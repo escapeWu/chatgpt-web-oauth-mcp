@@ -10,18 +10,18 @@ require_command launchctl
 for label in "$(mcp_label)" "$(cloudflared_label)" "$(watchdog_label)"; do
   target="$(launchctl_target "${label}")"
   echo "=== ${target} ==="
-  if launchctl print "${target}" >/tmp/notion-local-ops-launchctl.print 2>&1; then
-    sed -n '1,40p' /tmp/notion-local-ops-launchctl.print
+  if launchctl print "${target}" >/tmp/chatgpt-web-oauth-mcp-launchctl.print 2>&1; then
+    sed -n '1,40p' /tmp/chatgpt-web-oauth-mcp-launchctl.print
   else
-    cat /tmp/notion-local-ops-launchctl.print
+    cat /tmp/chatgpt-web-oauth-mcp-launchctl.print
   fi
   echo
-  rm -f /tmp/notion-local-ops-launchctl.print
+  rm -f /tmp/chatgpt-web-oauth-mcp-launchctl.print
 done
 
 echo "=== local MCP ==="
-if curl -fsSI "http://${NOTION_LOCAL_OPS_HOST}:${NOTION_LOCAL_OPS_PORT}/mcp" >/dev/null 2>&1; then
-  curl -sSI "http://${NOTION_LOCAL_OPS_HOST}:${NOTION_LOCAL_OPS_PORT}/mcp" | sed -n '1,12p'
+if curl -fsSI "http://${CHATGPT_MCP_HOST}:${CHATGPT_MCP_PORT}/mcp" >/dev/null 2>&1; then
+  curl -sSI "http://${CHATGPT_MCP_HOST}:${CHATGPT_MCP_PORT}/mcp" | sed -n '1,12p'
 else
   echo "Local /mcp is not reachable"
 fi
@@ -40,6 +40,6 @@ if CLOUDFLARED_CONFIG="$(pick_cloudflared_config 2>/dev/null || true)"; then
 fi
 
 echo
-echo "Logs: ${NOTION_LOCAL_OPS_LAUNCHD_LOG_DIR}"
+echo "Logs: ${CHATGPT_MCP_LAUNCHD_LOG_DIR}"
 echo
 echo "Run ./scripts/launchd-doctor.sh --fix for an immediate health check and targeted restart."

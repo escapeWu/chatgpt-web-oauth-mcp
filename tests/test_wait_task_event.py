@@ -4,8 +4,8 @@ import threading
 import time
 from pathlib import Path
 
-from notion_local_ops_mcp.executors import ExecutorRegistry
-from notion_local_ops_mcp.tasks import TaskStore
+from chatgpt_web_oauth_mcp.executors import ExecutorRegistry
+from chatgpt_web_oauth_mcp.tasks import TaskStore
 
 
 def _registry(tmp_path: Path) -> ExecutorRegistry:

@@ -81,7 +81,7 @@ class OAuthManager:
             "authorization_servers": [base_url],
             "scopes_supported": list(self.config.scopes),
             "bearer_methods_supported": ["header"],
-            "resource_name": "notion-local-ops-mcp",
+            "resource_name": "chatgpt-web-oauth-mcp",
         }
 
     def register_client(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -228,7 +228,7 @@ class OAuthManager:
         return f"""
 <!doctype html>
 <html>
-  <head><meta charset="utf-8"><title>Authorize notion-local-ops-mcp</title></head>
+  <head><meta charset="utf-8"><title>Authorize chatgpt-web-oauth-mcp</title></head>
   <body>
     <main style="font-family: system-ui; max-width: 480px; margin: 48px auto;">
       <h1>Authorize local MCP access</h1>

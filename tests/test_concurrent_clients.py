@@ -20,7 +20,7 @@ def _find_free_port() -> int:
 
 @contextlib.contextmanager
 def _running_server(tmp_path: Path, monkeypatch):
-    from notion_local_ops_mcp import server
+    from chatgpt_web_oauth_mcp import server
 
     monkeypatch.setattr(server, "AUTH_TOKEN", "")
     monkeypatch.setattr(server, "WORKSPACE_ROOT", tmp_path)

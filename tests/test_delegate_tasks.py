@@ -2,9 +2,9 @@ import time
 from pathlib import Path
 
 import pytest
-import notion_local_ops_mcp.executors as executors
-from notion_local_ops_mcp.executors import ExecutorRegistry, Invocation
-from notion_local_ops_mcp.tasks import TaskStore
+import chatgpt_web_oauth_mcp.executors as executors
+from chatgpt_web_oauth_mcp.executors import ExecutorRegistry, Invocation
+from chatgpt_web_oauth_mcp.tasks import TaskStore
 
 
 def test_executor_registry_prefers_codex_when_present(tmp_path: Path) -> None:

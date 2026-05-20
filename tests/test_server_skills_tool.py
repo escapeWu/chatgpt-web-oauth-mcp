@@ -13,7 +13,7 @@ def _call(tool, *args, **kwargs):
 
 
 def test_server_list_skills_tool_returns_structured_summary(tmp_path: Path) -> None:
-    from notion_local_ops_mcp import server
+    from chatgpt_web_oauth_mcp import server
 
     workspace_root = tmp_path / "workspace"
     project_skill = workspace_root / ".agents" / "skills" / "project-helper" / "SKILL.md"
@@ -51,7 +51,7 @@ def test_server_list_skills_tool_returns_structured_summary(tmp_path: Path) -> N
 
 
 def test_server_list_skills_tool_forwards_new_filter_arguments(tmp_path: Path) -> None:
-    from notion_local_ops_mcp import server
+    from chatgpt_web_oauth_mcp import server
 
     captured: dict[str, object] = {}
 

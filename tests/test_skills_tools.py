@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from notion_local_ops_mcp.skills import list_skills
+from chatgpt_web_oauth_mcp.skills import list_skills
 
 
 def _write_skill(root: Path, folder: str, *, name: str, description: str) -> None:

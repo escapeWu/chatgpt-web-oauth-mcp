@@ -4,7 +4,7 @@ Today there is a single mutable “default working directory” shared by every
 client of this server process. That is deliberately simple: the project runs
 as a single-user local bridge, so per-connection sessions are overkill.
 
-The default cwd is used by :func:`notion_local_ops_mcp.pathing.resolve_cwd`
+The default cwd is used by :func:`chatgpt_web_oauth_mcp.pathing.resolve_cwd`
 as the fallback whenever a tool call omits ``cwd``. Resolution order is:
 
 1. explicit ``cwd`` argument on the tool call

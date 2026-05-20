@@ -17,13 +17,13 @@ source "${ROOT_DIR}/.venv/bin/activate"
 
 ensure_python_runtime_deps
 
-if [[ -z "${NOTION_LOCAL_OPS_AUTH_TOKEN:-}" ]]; then
-  echo "Missing NOTION_LOCAL_OPS_AUTH_TOKEN. Set it in .env or export it before installing launchd services." >&2
+if [[ -z "${CHATGPT_MCP_AUTH_TOKEN:-}" ]]; then
+  echo "Missing CHATGPT_MCP_AUTH_TOKEN. Set it in .env or export it before installing launchd services." >&2
   exit 1
 fi
 
 if ! CLOUDFLARED_CONFIG="$(pick_cloudflared_config)"; then
-  echo "A named cloudflared config is required for launchd install. Set NOTION_LOCAL_OPS_CLOUDFLARED_CONFIG or add cloudflared.local.yml." >&2
+  echo "A named cloudflared config is required for launchd install. Set CHATGPT_MCP_CLOUDFLARED_CONFIG or add cloudflared.local.yml." >&2
   exit 1
 fi
 
@@ -43,18 +43,18 @@ launchctl bootout "${MCP_TARGET}" 2>/dev/null || true
 launchctl bootout "${CLOUDFLARED_TARGET}" 2>/dev/null || true
 sleep 1
 
-if lsof -nP -iTCP:"${NOTION_LOCAL_OPS_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
-  echo "Port ${NOTION_LOCAL_OPS_PORT} is already in use. Stop manual dev-tunnel/tmux processes before installing launchd services." >&2
+if lsof -nP -iTCP:"${CHATGPT_MCP_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "Port ${CHATGPT_MCP_PORT} is already in use. Stop manual dev-tunnel/tmux processes before installing launchd services." >&2
   exit 1
 fi
 
-mkdir -p "${NOTION_LOCAL_OPS_LAUNCHD_DIR}" "${NOTION_LOCAL_OPS_LAUNCHD_LOG_DIR}" "${NOTION_LOCAL_OPS_STATE_DIR}"
+mkdir -p "${CHATGPT_MCP_LAUNCHD_DIR}" "${CHATGPT_MCP_LAUNCHD_LOG_DIR}" "${CHATGPT_MCP_STATE_DIR}"
 export ROOT_DIR CLOUDFLARED_BIN CLOUDFLARED_CONFIG MCP_PLIST CLOUDFLARED_PLIST WATCHDOG_PLIST
 python - <<'PY'
 import os
 from pathlib import Path
 
-from notion_local_ops_mcp.launchd_support import (
+from chatgpt_web_oauth_mcp.launchd_support import (
     LaunchdServiceConfig,
     build_cloudflared_launch_agent,
     build_mcp_launch_agent,
@@ -64,38 +64,38 @@ from notion_local_ops_mcp.launchd_support import (
 
 config = LaunchdServiceConfig(
     repo_root=Path(os.environ["ROOT_DIR"]),
-    launch_agents_dir=Path(os.environ["NOTION_LOCAL_OPS_LAUNCHD_DIR"]),
-    logs_dir=Path(os.environ["NOTION_LOCAL_OPS_LAUNCHD_LOG_DIR"]),
-    label_prefix=os.environ["NOTION_LOCAL_OPS_LAUNCHD_LABEL_PREFIX"],
+    launch_agents_dir=Path(os.environ["CHATGPT_MCP_LAUNCHD_DIR"]),
+    logs_dir=Path(os.environ["CHATGPT_MCP_LAUNCHD_LOG_DIR"]),
+    label_prefix=os.environ["CHATGPT_MCP_LAUNCHD_LABEL_PREFIX"],
     python_bin=Path(os.environ["ROOT_DIR"]) / ".venv" / "bin" / "python",
     cloudflared_bin=Path(os.environ["CLOUDFLARED_BIN"]),
     cloudflared_config=Path(os.environ["CLOUDFLARED_CONFIG"]),
-    tunnel_name=os.environ.get("NOTION_LOCAL_OPS_TUNNEL_NAME") or None,
+    tunnel_name=os.environ.get("CHATGPT_MCP_TUNNEL_NAME") or None,
     env={
         key: value
         for key, value in os.environ.items()
         if key in {
             "PATH",
-            "NOTION_LOCAL_OPS_HOST",
-            "NOTION_LOCAL_OPS_PORT",
-            "NOTION_LOCAL_OPS_WORKSPACE_ROOT",
-            "NOTION_LOCAL_OPS_STATE_DIR",
-            "NOTION_LOCAL_OPS_AUTH_TOKEN",
-            "NOTION_LOCAL_OPS_AUTH_MODE",
-            "NOTION_LOCAL_OPS_PUBLIC_BASE_URL",
-            "NOTION_LOCAL_OPS_OAUTH_LOGIN_TOKEN",
-            "NOTION_LOCAL_OPS_OAUTH_SCOPES",
-            "NOTION_LOCAL_OPS_OAUTH_TOKEN_TTL_SECONDS",
-            "NOTION_LOCAL_OPS_CODEX_COMMAND",
-            "NOTION_LOCAL_OPS_CLAUDE_COMMAND",
-            "NOTION_LOCAL_OPS_COMMAND_TIMEOUT",
-            "NOTION_LOCAL_OPS_DELEGATE_TIMEOUT",
-            "NOTION_LOCAL_OPS_DEBUG_MCP_LOGGING",
-            "NOTION_LOCAL_OPS_GRACEFUL_SHUTDOWN_SECONDS",
-            "NOTION_LOCAL_OPS_WATCHDOG_INTERVAL_SECONDS",
-            "NOTION_LOCAL_OPS_DOCTOR_FAILURE_THRESHOLD",
-            "NOTION_LOCAL_OPS_DOCTOR_BASE_BACKOFF_SECONDS",
-            "NOTION_LOCAL_OPS_DOCTOR_MAX_BACKOFF_SECONDS",
+            "CHATGPT_MCP_HOST",
+            "CHATGPT_MCP_PORT",
+            "CHATGPT_MCP_WORKSPACE_ROOT",
+            "CHATGPT_MCP_STATE_DIR",
+            "CHATGPT_MCP_AUTH_TOKEN",
+            "CHATGPT_MCP_AUTH_MODE",
+            "CHATGPT_MCP_PUBLIC_BASE_URL",
+            "CHATGPT_MCP_OAUTH_LOGIN_TOKEN",
+            "CHATGPT_MCP_OAUTH_SCOPES",
+            "CHATGPT_MCP_OAUTH_TOKEN_TTL_SECONDS",
+            "CHATGPT_MCP_CODEX_COMMAND",
+            "CHATGPT_MCP_CLAUDE_COMMAND",
+            "CHATGPT_MCP_COMMAND_TIMEOUT",
+            "CHATGPT_MCP_DELEGATE_TIMEOUT",
+            "CHATGPT_MCP_DEBUG_MCP_LOGGING",
+            "CHATGPT_MCP_GRACEFUL_SHUTDOWN_SECONDS",
+            "CHATGPT_MCP_WATCHDOG_INTERVAL_SECONDS",
+            "CHATGPT_MCP_DOCTOR_FAILURE_THRESHOLD",
+            "CHATGPT_MCP_DOCTOR_BASE_BACKOFF_SECONDS",
+            "CHATGPT_MCP_DOCTOR_MAX_BACKOFF_SECONDS",
             "HTTP_PROXY",
             "HTTPS_PROXY",
             "ALL_PROXY",
@@ -112,7 +112,7 @@ config = LaunchdServiceConfig(
     cloudflared_bin=config.cloudflared_bin,
     cloudflared_config=config.cloudflared_config,
     tunnel_name=config.tunnel_name,
-    env={**config.env, "PATH": os.environ["NOTION_LOCAL_OPS_LAUNCHD_PATH"]},
+    env={**config.env, "PATH": os.environ["CHATGPT_MCP_LAUNCHD_PATH"]},
 )
 write_launch_agent(Path(os.environ["MCP_PLIST"]), build_mcp_launch_agent(config))
 write_launch_agent(Path(os.environ["CLOUDFLARED_PLIST"]), build_cloudflared_launch_agent(config))
@@ -120,7 +120,7 @@ write_launch_agent(
     Path(os.environ["WATCHDOG_PLIST"]),
     build_watchdog_launch_agent(
         config,
-        interval_seconds=int(os.environ["NOTION_LOCAL_OPS_WATCHDOG_INTERVAL_SECONDS"]),
+        interval_seconds=int(os.environ["CHATGPT_MCP_WATCHDOG_INTERVAL_SECONDS"]),
     ),
 )
 PY
@@ -132,8 +132,8 @@ launchctl kickstart -k "${MCP_TARGET}"
 launchctl kickstart -k "${CLOUDFLARED_TARGET}"
 sleep 4
 
-if ! curl -fsSI "http://${NOTION_LOCAL_OPS_HOST}:${NOTION_LOCAL_OPS_PORT}/mcp" >/dev/null 2>&1; then
-  echo "Launchd services installed, but local /mcp is not reachable yet. Check launchctl print ${MCP_TARGET} and logs under ${NOTION_LOCAL_OPS_LAUNCHD_LOG_DIR}." >&2
+if ! curl -fsSI "http://${CHATGPT_MCP_HOST}:${CHATGPT_MCP_PORT}/mcp" >/dev/null 2>&1; then
+  echo "Launchd services installed, but local /mcp is not reachable yet. Check launchctl print ${MCP_TARGET} and logs under ${CHATGPT_MCP_LAUNCHD_LOG_DIR}." >&2
   exit 1
 fi
 launchctl bootstrap "gui/${UID}" "${WATCHDOG_PLIST}"
@@ -142,10 +142,10 @@ launchctl kickstart -k "${WATCHDOG_TARGET}" || true
 echo "Installed launchd services:"
 echo "- MCP:         ${MCP_TARGET}"
 echo "- cloudflared: ${CLOUDFLARED_TARGET}"
-echo "- watchdog:    ${WATCHDOG_TARGET} (every ${NOTION_LOCAL_OPS_WATCHDOG_INTERVAL_SECONDS}s)"
+echo "- watchdog:    ${WATCHDOG_TARGET} (every ${CHATGPT_MCP_WATCHDOG_INTERVAL_SECONDS}s)"
 echo "Plists:"
 echo "- ${MCP_PLIST}"
 echo "- ${CLOUDFLARED_PLIST}"
 echo "- ${WATCHDOG_PLIST}"
-echo "Logs: ${NOTION_LOCAL_OPS_LAUNCHD_LOG_DIR}"
+echo "Logs: ${CHATGPT_MCP_LAUNCHD_LOG_DIR}"
 echo "Use ./scripts/launchd-status.sh to inspect, ./scripts/launchd-doctor.sh --fix for one-shot repair, ./scripts/launchd-reload.sh for code reload, and ./scripts/launchd-restart.sh all for full restarts."

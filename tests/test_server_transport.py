@@ -21,9 +21,9 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from notion_local_ops_mcp import server
-from notion_local_ops_mcp.http_compat import MCPDebugLoggingMiddleware
-from notion_local_ops_mcp.server import build_http_app
+from chatgpt_web_oauth_mcp import server
+from chatgpt_web_oauth_mcp.http_compat import MCPDebugLoggingMiddleware
+from chatgpt_web_oauth_mcp.server import build_http_app
 
 
 def _find_free_port() -> int:
@@ -255,7 +255,7 @@ def test_oauth_metadata_does_not_trust_x_forwarded_host(monkeypatch, tmp_path) -
 
 
 def test_oauth_register_enforces_client_limit(monkeypatch, tmp_path) -> None:
-    from notion_local_ops_mcp.oauth import MAX_REGISTERED_CLIENTS
+    from chatgpt_web_oauth_mcp.oauth import MAX_REGISTERED_CLIENTS
 
     monkeypatch.setattr(server, "AUTH_MODE", "oauth")
     monkeypatch.setattr(server, "AUTH_TOKEN", "secret-token")
@@ -453,13 +453,13 @@ def test_debug_logging_middleware_logs_rpc_method_and_preserves_body(caplog) -> 
         "params": {"name": "search", "arguments": {"mode": "text", "query": "TODO"}},
     }
 
-    caplog.set_level(logging.INFO, logger="notion_local_ops_mcp.mcp_debug")
+    caplog.set_level(logging.INFO, logger="chatgpt_web_oauth_mcp.mcp_debug")
     with TestClient(app) as client:
         response = client.post("/mcp", json=payload, headers={"mcp-session-id": "sess-123"})
 
     assert response.status_code == 200
     assert response.json() == payload
-    messages = [record.message for record in caplog.records if record.name == "notion_local_ops_mcp.mcp_debug"]
+    messages = [record.message for record in caplog.records if record.name == "chatgpt_web_oauth_mcp.mcp_debug"]
     assert any("phase=request" in message and '"method":"tools/call"' in message for message in messages)
     assert any('"tool":"search"' in message for message in messages)
     assert any('"tool_args":"{\\"mode\\":\\"text\\",\\"query\\":\\"TODO\\"}"' in message for message in messages)

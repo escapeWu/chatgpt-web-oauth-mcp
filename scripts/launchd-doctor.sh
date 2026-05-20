@@ -6,12 +6,12 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/launchd-common.sh"
 
 FIX=0
 QUIET=0
-LOCAL_WAIT_SECONDS="${NOTION_LOCAL_OPS_DOCTOR_LOCAL_WAIT_SECONDS:-20}"
-PUBLIC_WAIT_SECONDS="${NOTION_LOCAL_OPS_DOCTOR_PUBLIC_WAIT_SECONDS:-30}"
-FAIL_THRESHOLD="${NOTION_LOCAL_OPS_DOCTOR_FAILURE_THRESHOLD:-3}"
-BASE_BACKOFF_SECONDS="${NOTION_LOCAL_OPS_DOCTOR_BASE_BACKOFF_SECONDS:-300}"
-MAX_BACKOFF_SECONDS="${NOTION_LOCAL_OPS_DOCTOR_MAX_BACKOFF_SECONDS:-3600}"
-STATE_FILE="${NOTION_LOCAL_OPS_DOCTOR_STATE_FILE:-}"
+LOCAL_WAIT_SECONDS="${CHATGPT_MCP_DOCTOR_LOCAL_WAIT_SECONDS:-20}"
+PUBLIC_WAIT_SECONDS="${CHATGPT_MCP_DOCTOR_PUBLIC_WAIT_SECONDS:-30}"
+FAIL_THRESHOLD="${CHATGPT_MCP_DOCTOR_FAILURE_THRESHOLD:-3}"
+BASE_BACKOFF_SECONDS="${CHATGPT_MCP_DOCTOR_BASE_BACKOFF_SECONDS:-300}"
+MAX_BACKOFF_SECONDS="${CHATGPT_MCP_DOCTOR_MAX_BACKOFF_SECONDS:-3600}"
+STATE_FILE="${CHATGPT_MCP_DOCTOR_STATE_FILE:-}"
 
 usage() {
   cat >&2 <<'USAGE'
@@ -26,7 +26,7 @@ Auto-fix guardrails:
   - public /mcp down while local is healthy: restart cloudflared after sustained
     public failures
   - restarts use exponential backoff, capped by
-    NOTION_LOCAL_OPS_DOCTOR_MAX_BACKOFF_SECONDS
+    CHATGPT_MCP_DOCTOR_MAX_BACKOFF_SECONDS
 USAGE
 }
 
@@ -55,14 +55,14 @@ require_command curl
 require_command launchctl
 
 if [[ -z "${STATE_FILE}" ]]; then
-  STATE_FILE="${NOTION_LOCAL_OPS_STATE_DIR}/launchd-doctor.state"
+  STATE_FILE="${CHATGPT_MCP_STATE_DIR}/launchd-doctor.state"
 fi
 
 MCP_LABEL="$(mcp_label)"
 CLOUDFLARED_LABEL="$(cloudflared_label)"
 MCP_TARGET="$(launchctl_target "${MCP_LABEL}")"
 CLOUDFLARED_TARGET="$(launchctl_target "${CLOUDFLARED_LABEL}")"
-LOCAL_URL="http://${NOTION_LOCAL_OPS_HOST}:${NOTION_LOCAL_OPS_PORT}/mcp"
+LOCAL_URL="http://${CHATGPT_MCP_HOST}:${CHATGPT_MCP_PORT}/mcp"
 PUBLIC_URL=""
 
 log() {
@@ -212,7 +212,7 @@ maybe_restart_mcp() {
     save_state
     return 0
   fi
-  warn "MCP restart did not recover local /mcp within ${LOCAL_WAIT_SECONDS}s. Next restart allowed in ${backoff}s. Check ${NOTION_LOCAL_OPS_LAUNCHD_LOG_DIR}/mcp-server.log"
+  warn "MCP restart did not recover local /mcp within ${LOCAL_WAIT_SECONDS}s. Next restart allowed in ${backoff}s. Check ${CHATGPT_MCP_LAUNCHD_LOG_DIR}/mcp-server.log"
   return 1
 }
 
@@ -238,7 +238,7 @@ maybe_restart_cloudflared() {
     save_state
     return 0
   fi
-  warn "cloudflared restart did not recover public /mcp within ${PUBLIC_WAIT_SECONDS}s. Next restart allowed in ${backoff}s. Check ${NOTION_LOCAL_OPS_LAUNCHD_LOG_DIR}/cloudflared.stderr.log"
+  warn "cloudflared restart did not recover public /mcp within ${PUBLIC_WAIT_SECONDS}s. Next restart allowed in ${backoff}s. Check ${CHATGPT_MCP_LAUNCHD_LOG_DIR}/cloudflared.stderr.log"
   return 1
 }
 

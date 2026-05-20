@@ -3,9 +3,9 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "notion-local-ops-mcp"
+name = "chatgpt-web-oauth-mcp"
 version = "0.1.0"
-description = "Local FastMCP server for Notion daily ops with delegate_task fallback."
+description = "ChatGPT Web-compatible OAuth MCP server for local files, shell, git, and delegated coding tasks."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -21,8 +21,8 @@ dev = [
 ]
 
 [project.scripts]
-notion-local-ops-mcp = "notion_local_ops_mcp.server:main"
-notion-local-ops-supervisor = "notion_local_ops_mcp.supervisor:main"
+chatgpt-web-oauth-mcp = "chatgpt_web_oauth_mcp.server:main"
+chatgpt-web-oauth-supervisor = "chatgpt_web_oauth_mcp.supervisor:main"
 
 [tool.setuptools.package-dir]
 "" = "src"

@@ -25,8 +25,8 @@ resolve_path() {
 pick_cloudflared_config() {
   local candidate
 
-  if [[ -n "${NOTION_LOCAL_OPS_CLOUDFLARED_CONFIG:-}" ]]; then
-    resolve_path "${NOTION_LOCAL_OPS_CLOUDFLARED_CONFIG}"
+  if [[ -n "${CHATGPT_MCP_CLOUDFLARED_CONFIG:-}" ]]; then
+    resolve_path "${CHATGPT_MCP_CLOUDFLARED_CONFIG}"
     return 0
   fi
 
@@ -89,9 +89,9 @@ if installed_fastmcp not in fastmcp_req.specifier:
     )
 
 try:
-    project_metadata = metadata("notion-local-ops-mcp")
+    project_metadata = metadata("chatgpt-web-oauth-mcp")
 except PackageNotFoundError as exc:
-    raise SystemExit("notion-local-ops-mcp is not installed") from exc
+    raise SystemExit("chatgpt-web-oauth-mcp is not installed") from exc
 
 runtime_reqs = project_metadata.get_all("Requires-Dist") or []
 metadata_fastmcp_reqs = [
@@ -111,14 +111,14 @@ if expected_parts and expected_parts not in metadata_parts:
     )
 
 import fastmcp  # noqa: F401
-import notion_local_ops_mcp.launchd_support  # noqa: F401
-import notion_local_ops_mcp.supervisor  # noqa: F401
+import chatgpt_web_oauth_mcp.launchd_support  # noqa: F401
+import chatgpt_web_oauth_mcp.supervisor  # noqa: F401
 import uvicorn  # noqa: F401
 PY
 }
 
 ensure_python_runtime_deps() {
-  if ! command -v notion-local-ops-mcp >/dev/null 2>&1 || ! python_runtime_deps_ok; then
+  if ! command -v chatgpt-web-oauth-mcp >/dev/null 2>&1 || ! python_runtime_deps_ok; then
     python -m pip install -e .
   fi
 }
@@ -131,66 +131,66 @@ require_command() {
 }
 
 prepare_launchd_env() {
-  local override_host="${NOTION_LOCAL_OPS_HOST:-}"
-  local override_port="${NOTION_LOCAL_OPS_PORT:-}"
-  local override_workspace_root="${NOTION_LOCAL_OPS_WORKSPACE_ROOT:-}"
-  local override_state_dir="${NOTION_LOCAL_OPS_STATE_DIR:-}"
-  local override_auth_token="${NOTION_LOCAL_OPS_AUTH_TOKEN:-}"
-  local override_cloudflared_config="${NOTION_LOCAL_OPS_CLOUDFLARED_CONFIG:-}"
-  local override_tunnel_name="${NOTION_LOCAL_OPS_TUNNEL_NAME:-}"
-  local override_codex_command="${NOTION_LOCAL_OPS_CODEX_COMMAND:-}"
-  local override_claude_command="${NOTION_LOCAL_OPS_CLAUDE_COMMAND:-}"
-  local override_command_timeout="${NOTION_LOCAL_OPS_COMMAND_TIMEOUT:-}"
-  local override_delegate_timeout="${NOTION_LOCAL_OPS_DELEGATE_TIMEOUT:-}"
-  local override_debug_mcp_logging="${NOTION_LOCAL_OPS_DEBUG_MCP_LOGGING:-}"
-  local override_graceful_shutdown_seconds="${NOTION_LOCAL_OPS_GRACEFUL_SHUTDOWN_SECONDS:-}"
-  local override_watchdog_interval_seconds="${NOTION_LOCAL_OPS_WATCHDOG_INTERVAL_SECONDS:-}"
-  local override_doctor_failure_threshold="${NOTION_LOCAL_OPS_DOCTOR_FAILURE_THRESHOLD:-}"
-  local override_doctor_base_backoff_seconds="${NOTION_LOCAL_OPS_DOCTOR_BASE_BACKOFF_SECONDS:-}"
-  local override_doctor_max_backoff_seconds="${NOTION_LOCAL_OPS_DOCTOR_MAX_BACKOFF_SECONDS:-}"
-  local override_label_prefix="${NOTION_LOCAL_OPS_LAUNCHD_LABEL_PREFIX:-}"
-  local override_launchd_dir="${NOTION_LOCAL_OPS_LAUNCHD_DIR:-}"
-  local override_launchd_log_dir="${NOTION_LOCAL_OPS_LAUNCHD_LOG_DIR:-}"
-  local override_launchd_path="${NOTION_LOCAL_OPS_LAUNCHD_PATH:-}"
+  local override_host="${CHATGPT_MCP_HOST:-}"
+  local override_port="${CHATGPT_MCP_PORT:-}"
+  local override_workspace_root="${CHATGPT_MCP_WORKSPACE_ROOT:-}"
+  local override_state_dir="${CHATGPT_MCP_STATE_DIR:-}"
+  local override_auth_token="${CHATGPT_MCP_AUTH_TOKEN:-}"
+  local override_cloudflared_config="${CHATGPT_MCP_CLOUDFLARED_CONFIG:-}"
+  local override_tunnel_name="${CHATGPT_MCP_TUNNEL_NAME:-}"
+  local override_codex_command="${CHATGPT_MCP_CODEX_COMMAND:-}"
+  local override_claude_command="${CHATGPT_MCP_CLAUDE_COMMAND:-}"
+  local override_command_timeout="${CHATGPT_MCP_COMMAND_TIMEOUT:-}"
+  local override_delegate_timeout="${CHATGPT_MCP_DELEGATE_TIMEOUT:-}"
+  local override_debug_mcp_logging="${CHATGPT_MCP_DEBUG_MCP_LOGGING:-}"
+  local override_graceful_shutdown_seconds="${CHATGPT_MCP_GRACEFUL_SHUTDOWN_SECONDS:-}"
+  local override_watchdog_interval_seconds="${CHATGPT_MCP_WATCHDOG_INTERVAL_SECONDS:-}"
+  local override_doctor_failure_threshold="${CHATGPT_MCP_DOCTOR_FAILURE_THRESHOLD:-}"
+  local override_doctor_base_backoff_seconds="${CHATGPT_MCP_DOCTOR_BASE_BACKOFF_SECONDS:-}"
+  local override_doctor_max_backoff_seconds="${CHATGPT_MCP_DOCTOR_MAX_BACKOFF_SECONDS:-}"
+  local override_label_prefix="${CHATGPT_MCP_LAUNCHD_LABEL_PREFIX:-}"
+  local override_launchd_dir="${CHATGPT_MCP_LAUNCHD_DIR:-}"
+  local override_launchd_log_dir="${CHATGPT_MCP_LAUNCHD_LOG_DIR:-}"
+  local override_launchd_path="${CHATGPT_MCP_LAUNCHD_PATH:-}"
 
   load_env_file
 
-  export NOTION_LOCAL_OPS_HOST="${override_host:-${NOTION_LOCAL_OPS_HOST:-127.0.0.1}}"
-  export NOTION_LOCAL_OPS_PORT="${override_port:-${NOTION_LOCAL_OPS_PORT:-8766}}"
-  export NOTION_LOCAL_OPS_WORKSPACE_ROOT="${override_workspace_root:-${NOTION_LOCAL_OPS_WORKSPACE_ROOT:-${ROOT_DIR}}}"
-  export NOTION_LOCAL_OPS_STATE_DIR="${override_state_dir:-${NOTION_LOCAL_OPS_STATE_DIR:-${HOME}/.notion-local-ops-mcp}}"
-  export NOTION_LOCAL_OPS_CLOUDFLARED_CONFIG="${override_cloudflared_config:-${NOTION_LOCAL_OPS_CLOUDFLARED_CONFIG:-}}"
-  export NOTION_LOCAL_OPS_TUNNEL_NAME="${override_tunnel_name:-${NOTION_LOCAL_OPS_TUNNEL_NAME:-}}"
-  export NOTION_LOCAL_OPS_CODEX_COMMAND="${override_codex_command:-${NOTION_LOCAL_OPS_CODEX_COMMAND:-codex}}"
-  export NOTION_LOCAL_OPS_CLAUDE_COMMAND="${override_claude_command:-${NOTION_LOCAL_OPS_CLAUDE_COMMAND:-claude}}"
-  export NOTION_LOCAL_OPS_COMMAND_TIMEOUT="${override_command_timeout:-${NOTION_LOCAL_OPS_COMMAND_TIMEOUT:-120}}"
-  export NOTION_LOCAL_OPS_DELEGATE_TIMEOUT="${override_delegate_timeout:-${NOTION_LOCAL_OPS_DELEGATE_TIMEOUT:-1800}}"
-  export NOTION_LOCAL_OPS_DEBUG_MCP_LOGGING="${override_debug_mcp_logging:-${NOTION_LOCAL_OPS_DEBUG_MCP_LOGGING:-0}}"
-  export NOTION_LOCAL_OPS_GRACEFUL_SHUTDOWN_SECONDS="${override_graceful_shutdown_seconds:-${NOTION_LOCAL_OPS_GRACEFUL_SHUTDOWN_SECONDS:-30}}"
-  export NOTION_LOCAL_OPS_WATCHDOG_INTERVAL_SECONDS="${override_watchdog_interval_seconds:-${NOTION_LOCAL_OPS_WATCHDOG_INTERVAL_SECONDS:-60}}"
-  export NOTION_LOCAL_OPS_DOCTOR_FAILURE_THRESHOLD="${override_doctor_failure_threshold:-${NOTION_LOCAL_OPS_DOCTOR_FAILURE_THRESHOLD:-3}}"
-  export NOTION_LOCAL_OPS_DOCTOR_BASE_BACKOFF_SECONDS="${override_doctor_base_backoff_seconds:-${NOTION_LOCAL_OPS_DOCTOR_BASE_BACKOFF_SECONDS:-300}}"
-  export NOTION_LOCAL_OPS_DOCTOR_MAX_BACKOFF_SECONDS="${override_doctor_max_backoff_seconds:-${NOTION_LOCAL_OPS_DOCTOR_MAX_BACKOFF_SECONDS:-3600}}"
-  export NOTION_LOCAL_OPS_LAUNCHD_LABEL_PREFIX="${override_label_prefix:-${NOTION_LOCAL_OPS_LAUNCHD_LABEL_PREFIX:-com.notion-local-ops}}"
-  export NOTION_LOCAL_OPS_LAUNCHD_DIR="${override_launchd_dir:-${NOTION_LOCAL_OPS_LAUNCHD_DIR:-${HOME}/Library/LaunchAgents}}"
-  export NOTION_LOCAL_OPS_LAUNCHD_LOG_DIR="${override_launchd_log_dir:-${NOTION_LOCAL_OPS_LAUNCHD_LOG_DIR:-${HOME}/Library/Logs/notion-local-ops-mcp}}"
-  export NOTION_LOCAL_OPS_LAUNCHD_PATH="${override_launchd_path:-${NOTION_LOCAL_OPS_LAUNCHD_PATH:-${CURRENT_SHELL_PATH}}}"
+  export CHATGPT_MCP_HOST="${override_host:-${CHATGPT_MCP_HOST:-127.0.0.1}}"
+  export CHATGPT_MCP_PORT="${override_port:-${CHATGPT_MCP_PORT:-8766}}"
+  export CHATGPT_MCP_WORKSPACE_ROOT="${override_workspace_root:-${CHATGPT_MCP_WORKSPACE_ROOT:-${ROOT_DIR}}}"
+  export CHATGPT_MCP_STATE_DIR="${override_state_dir:-${CHATGPT_MCP_STATE_DIR:-${HOME}/.chatgpt-web-oauth-mcp}}"
+  export CHATGPT_MCP_CLOUDFLARED_CONFIG="${override_cloudflared_config:-${CHATGPT_MCP_CLOUDFLARED_CONFIG:-}}"
+  export CHATGPT_MCP_TUNNEL_NAME="${override_tunnel_name:-${CHATGPT_MCP_TUNNEL_NAME:-}}"
+  export CHATGPT_MCP_CODEX_COMMAND="${override_codex_command:-${CHATGPT_MCP_CODEX_COMMAND:-codex}}"
+  export CHATGPT_MCP_CLAUDE_COMMAND="${override_claude_command:-${CHATGPT_MCP_CLAUDE_COMMAND:-claude}}"
+  export CHATGPT_MCP_COMMAND_TIMEOUT="${override_command_timeout:-${CHATGPT_MCP_COMMAND_TIMEOUT:-120}}"
+  export CHATGPT_MCP_DELEGATE_TIMEOUT="${override_delegate_timeout:-${CHATGPT_MCP_DELEGATE_TIMEOUT:-1800}}"
+  export CHATGPT_MCP_DEBUG_MCP_LOGGING="${override_debug_mcp_logging:-${CHATGPT_MCP_DEBUG_MCP_LOGGING:-0}}"
+  export CHATGPT_MCP_GRACEFUL_SHUTDOWN_SECONDS="${override_graceful_shutdown_seconds:-${CHATGPT_MCP_GRACEFUL_SHUTDOWN_SECONDS:-30}}"
+  export CHATGPT_MCP_WATCHDOG_INTERVAL_SECONDS="${override_watchdog_interval_seconds:-${CHATGPT_MCP_WATCHDOG_INTERVAL_SECONDS:-60}}"
+  export CHATGPT_MCP_DOCTOR_FAILURE_THRESHOLD="${override_doctor_failure_threshold:-${CHATGPT_MCP_DOCTOR_FAILURE_THRESHOLD:-3}}"
+  export CHATGPT_MCP_DOCTOR_BASE_BACKOFF_SECONDS="${override_doctor_base_backoff_seconds:-${CHATGPT_MCP_DOCTOR_BASE_BACKOFF_SECONDS:-300}}"
+  export CHATGPT_MCP_DOCTOR_MAX_BACKOFF_SECONDS="${override_doctor_max_backoff_seconds:-${CHATGPT_MCP_DOCTOR_MAX_BACKOFF_SECONDS:-3600}}"
+  export CHATGPT_MCP_LAUNCHD_LABEL_PREFIX="${override_label_prefix:-${CHATGPT_MCP_LAUNCHD_LABEL_PREFIX:-com.chatgpt-web-oauth-mcp}}"
+  export CHATGPT_MCP_LAUNCHD_DIR="${override_launchd_dir:-${CHATGPT_MCP_LAUNCHD_DIR:-${HOME}/Library/LaunchAgents}}"
+  export CHATGPT_MCP_LAUNCHD_LOG_DIR="${override_launchd_log_dir:-${CHATGPT_MCP_LAUNCHD_LOG_DIR:-${HOME}/Library/Logs/chatgpt-web-oauth-mcp}}"
+  export CHATGPT_MCP_LAUNCHD_PATH="${override_launchd_path:-${CHATGPT_MCP_LAUNCHD_PATH:-${CURRENT_SHELL_PATH}}}"
 
   if [[ -n "${override_auth_token}" ]]; then
-    export NOTION_LOCAL_OPS_AUTH_TOKEN="${override_auth_token}"
+    export CHATGPT_MCP_AUTH_TOKEN="${override_auth_token}"
   fi
 }
 
 mcp_label() {
-  printf '%s.mcp\n' "${NOTION_LOCAL_OPS_LAUNCHD_LABEL_PREFIX}"
+  printf '%s.mcp\n' "${CHATGPT_MCP_LAUNCHD_LABEL_PREFIX}"
 }
 
 cloudflared_label() {
-  printf '%s.cloudflared\n' "${NOTION_LOCAL_OPS_LAUNCHD_LABEL_PREFIX}"
+  printf '%s.cloudflared\n' "${CHATGPT_MCP_LAUNCHD_LABEL_PREFIX}"
 }
 
 watchdog_label() {
-  printf '%s.watchdog\n' "${NOTION_LOCAL_OPS_LAUNCHD_LABEL_PREFIX}"
+  printf '%s.watchdog\n' "${CHATGPT_MCP_LAUNCHD_LABEL_PREFIX}"
 }
 
 launchctl_target() {
@@ -200,5 +200,5 @@ launchctl_target() {
 
 plist_path_for_label() {
   local label="$1"
-  printf '%s/%s.plist\n' "${NOTION_LOCAL_OPS_LAUNCHD_DIR}" "${label}"
+  printf '%s/%s.plist\n' "${CHATGPT_MCP_LAUNCHD_DIR}" "${label}"
 }

@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from notion_local_ops_mcp import session
-from notion_local_ops_mcp.pathing import resolve_cwd
-from notion_local_ops_mcp.server import (
+from chatgpt_web_oauth_mcp import session
+from chatgpt_web_oauth_mcp.pathing import resolve_cwd
+from chatgpt_web_oauth_mcp.server import (
     get_default_cwd,
     server_info,
     set_default_cwd,

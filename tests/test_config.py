@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from notion_local_ops_mcp import config
+from chatgpt_web_oauth_mcp import config
 
 
 def test_ensure_runtime_directories_requires_existing_workspace_root(

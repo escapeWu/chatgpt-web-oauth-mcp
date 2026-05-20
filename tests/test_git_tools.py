@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from notion_local_ops_mcp.gitops import (
+from chatgpt_web_oauth_mcp.gitops import (
     git_blame,
     git_commit,
     git_diff,
