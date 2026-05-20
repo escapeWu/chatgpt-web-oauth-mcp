@@ -151,19 +151,19 @@ CHATGPT_MCP_EXTERNAL_CLOUDFLARED=1
 ./scripts/uninstall-launchd.sh
 ```
 
-## Obsidian 工具组
+## Obsidian 原生 MCP 代理
 
-本项目可以把 Obsidian 作为一组工具暴露给 ChatGPT Web，内部调用 Obsidian Local REST API 社区插件。先在 Obsidian 中启用该插件并复制 API key，然后在 `.env` 中加入：
+本项目可以把 Obsidian Local REST API 插件**内置的 MCP server**通过同一个公网 OAuth MCP endpoint 暴露给 ChatGPT Web。ChatGPT 仍然只连接本项目；本项目在本机连接 Obsidian 的原生 MCP endpoint。
+
+先启用 Obsidian Local REST API 插件并复制 API key，然后在 `.env` 中加入：
 
 ```bash
 OBSIDIAN_API_KEY="<your-obsidian-local-rest-api-key>"
-OBSIDIAN_HOST=127.0.0.1
-OBSIDIAN_PORT=27124
-OBSIDIAN_PROTOCOL=https
+OBSIDIAN_MCP_URL=https://127.0.0.1:27124/mcp
 OBSIDIAN_VERIFY_SSL=0
 ```
 
-可用工具包括 `obsidian_status`、文件列表/读取、简单搜索、JsonLogic 复杂搜索、标签搜索、frontmatter 读取、append/patch/put/delete 写入、周期笔记和最近修改。
+桥接层会直接暴露插件的原生 MCP 工具，包括 `vault_list`、`vault_read`、`vault_write`、`vault_append`、`vault_patch`、`vault_delete`、`vault_get_document_map`、`active_file_get_path`、`periodic_note_get_path`、`search_query`、`search_simple`、`tag_list`、`command_list`、`command_execute` 和 `open_file`。可以用 `vault_mcp_list_tools` 查看当前本地 Obsidian 插件实际广播出来的工具。
 
 ## 环境变量
 
@@ -187,10 +187,8 @@ OBSIDIAN_VERIFY_SSL=0
 | `CHATGPT_MCP_DELEGATE_TIMEOUT` | 否 | `1800` |
 | `CHATGPT_MCP_DEBUG_MCP_LOGGING` | 否 | `0` |
 | `CHATGPT_MCP_GRACEFUL_SHUTDOWN_SECONDS` | 否 | `30` |
-| `OBSIDIAN_API_KEY` | Obsidian 工具必需 | 空 |
-| `OBSIDIAN_HOST` | 否 | `127.0.0.1` |
-| `OBSIDIAN_PORT` | 否 | `27124` |
-| `OBSIDIAN_PROTOCOL` | 否 | `https` |
+| `OBSIDIAN_API_KEY` | Obsidian 原生 MCP 代理必需 | 空 |
+| `OBSIDIAN_MCP_URL` | 否 | `https://127.0.0.1:27124/mcp/` |
 | `OBSIDIAN_VERIFY_SSL` | 否 | `0` |
 
 ## 暴露的 MCP 工具
@@ -209,7 +207,7 @@ OBSIDIAN_VERIFY_SSL=0
 | `delegate_task` | 委托本地 Codex 或 Claude Code 做复杂任务 |
 | `get_task` / `wait_task` / `cancel_task` | 管理后台任务 |
 | `purge_tasks` | 清理过期任务日志 |
-| `obsidian_status` / `obsidian_list_files_in_vault` / `obsidian_get_file_contents` / `obsidian_simple_search` / `obsidian_patch_content` | 通过 Obsidian Local REST API 插件操作 vault |
+| `vault_list` / `vault_read` / `vault_patch` / `search_simple` / `command_execute` / `open_file` | 通过 Obsidian Local REST API 插件的原生 MCP server 操作 vault |
 
 ## 安全提醒
 

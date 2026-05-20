@@ -157,6 +157,7 @@ prepare_launchd_env() {
   local override_obsidian_host="${OBSIDIAN_HOST:-}"
   local override_obsidian_port="${OBSIDIAN_PORT:-}"
   local override_obsidian_protocol="${OBSIDIAN_PROTOCOL:-}"
+  local override_obsidian_mcp_url="${OBSIDIAN_MCP_URL:-}"
   local override_obsidian_verify_ssl="${OBSIDIAN_VERIFY_SSL:-}"
   local override_obsidian_timeout_seconds="${OBSIDIAN_TIMEOUT_SECONDS:-}"
 
@@ -186,6 +187,7 @@ prepare_launchd_env() {
   export OBSIDIAN_HOST="${override_obsidian_host:-${OBSIDIAN_HOST:-127.0.0.1}}"
   export OBSIDIAN_PORT="${override_obsidian_port:-${OBSIDIAN_PORT:-27124}}"
   export OBSIDIAN_PROTOCOL="${override_obsidian_protocol:-${OBSIDIAN_PROTOCOL:-https}}"
+  export OBSIDIAN_MCP_URL="${override_obsidian_mcp_url:-${OBSIDIAN_MCP_URL:-}}"
   export OBSIDIAN_VERIFY_SSL="${override_obsidian_verify_ssl:-${OBSIDIAN_VERIFY_SSL:-0}}"
   export OBSIDIAN_TIMEOUT_SECONDS="${override_obsidian_timeout_seconds:-${OBSIDIAN_TIMEOUT_SECONDS:-10}}"
 

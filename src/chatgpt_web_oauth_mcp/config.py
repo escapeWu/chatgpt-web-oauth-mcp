@@ -71,6 +71,7 @@ OBSIDIAN_API_KEY = os.environ.get("OBSIDIAN_API_KEY", "").strip()
 OBSIDIAN_HOST = os.environ.get("OBSIDIAN_HOST", "127.0.0.1").strip() or "127.0.0.1"
 OBSIDIAN_PORT = int(os.environ.get("OBSIDIAN_PORT", "27124"))
 OBSIDIAN_PROTOCOL = os.environ.get("OBSIDIAN_PROTOCOL", "https").strip().lower() or "https"
+OBSIDIAN_MCP_URL = os.environ.get("OBSIDIAN_MCP_URL", "").strip()
 OBSIDIAN_VERIFY_SSL = _env_flag("OBSIDIAN_VERIFY_SSL", default=False)
 OBSIDIAN_TIMEOUT_SECONDS = int(os.environ.get("OBSIDIAN_TIMEOUT_SECONDS", "10"))
 

@@ -12,6 +12,7 @@ dependencies = [
     # Keep this explicit: local launchd/dev scripts verify the live venv
     # against pyproject.toml so stale editable metadata cannot silently drift.
     "fastmcp>=3.2.4,<4",
+    "mcp>=1.27.1,<2",
     "uvicorn>=0.30.0",
 ]
 
