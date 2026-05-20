@@ -1,5 +1,7 @@
 # chatgpt-web-oauth-mcp
 
+> [感谢 LINIXDO 社区](https://linux.do/)
+
 A local FastMCP server that exposes filesystem, shell, git, and delegated coding tools to **ChatGPT Web** through an HTTPS MCP endpoint with OAuth.
 
 This project is a stripped-down ChatGPT Web OAuth MCP server. It keeps the useful local-ops MCP tools and the OAuth compatibility layer, while removing the original Notion-specific workflow, docs, assets, and prompts.
