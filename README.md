@@ -6,6 +6,19 @@ A local FastMCP server that exposes filesystem, shell, git, and delegated coding
 
 This project is a stripped-down ChatGPT Web OAuth MCP server. It keeps the useful local-ops MCP tools and the OAuth compatibility layer, while removing the original Notion-specific workflow, docs, assets, and prompts.
 
+## Upstream project
+
+This project was extracted from [`catoncat/notion-local-ops-mcp`](https://github.com/catoncat/notion-local-ops-mcp).
+
+The upstream project explored using an MCP Agent with local files, shell, git, and delegated coding tasks. This repository keeps the reusable local-ops MCP server and the ChatGPT Web-compatible OAuth layer, then removes the product-specific workflow docs, screenshots, prompts, and branding so the result is a focused ChatGPT Web OAuth MCP server.
+
+Major changes from upstream:
+
+- Renamed the Python package, CLI commands, launchd labels, and environment variable prefix to `chatgpt-web-oauth-mcp` / `CHATGPT_MCP_*`.
+- Removed product-specific docs, screenshots, and agent prompts.
+- Rewrote the README around ChatGPT Web OAuth MCP usage.
+- Kept the local tools, OAuth dynamic client registration, PKCE flow, protected-resource metadata, and Cloudflare Tunnel helpers.
+
 ## What it provides
 
 - Streamable HTTP MCP endpoint at `/mcp`

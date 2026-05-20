@@ -6,6 +6,19 @@
 
 这个版本已经剥离原项目中的 Notion 专用工作流、说明文档、截图资源和提示词，只保留 ChatGPT Web OAuth MCP 适配与本地操作工具。
 
+## 上游项目来源
+
+本项目基于 [`catoncat/notion-local-ops-mcp`](https://github.com/catoncat/notion-local-ops-mcp) 剥离和改造而来。
+
+原项目探索了让 MCP Agent 调用本地文件、Shell、Git 和本地 Codex/Claude 委托任务的能力。本仓库保留其中可复用的 local-ops MCP server 与 ChatGPT Web 兼容的 OAuth 层，移除了产品专用工作流文档、截图资源、提示词和品牌命名，使其成为一个更纯粹的 ChatGPT Web OAuth MCP 项目。
+
+相对上游的主要改动：
+
+- 将 Python 包名、CLI 命令、launchd label、环境变量前缀统一改为 `chatgpt-web-oauth-mcp` / `CHATGPT_MCP_*`。
+- 删除产品专用文档、截图资源和 agent prompt。
+- 围绕 ChatGPT Web OAuth MCP 使用方式重写 README。
+- 保留本地工具、OAuth dynamic client registration、PKCE flow、protected-resource metadata 和 Cloudflare Tunnel 辅助脚本。
+
 ## 能力
 
 - `/mcp` Streamable HTTP MCP endpoint
