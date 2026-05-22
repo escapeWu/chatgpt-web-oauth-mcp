@@ -2,13 +2,13 @@
 
 > [感谢 LINIXDO 社区](https://linux.do/)
 
+[![中文文档](https://img.shields.io/badge/docs-中文-blue.svg)](README-zh.md)
+
 A local FastMCP server that exposes filesystem, shell, git, and delegated coding tools to **ChatGPT Web** through an HTTPS MCP endpoint with OAuth.
 
 This project is a stripped-down ChatGPT Web OAuth MCP server. It keeps the useful local-ops MCP tools and the OAuth compatibility layer, while removing the original Notion-specific workflow, docs, assets, and prompts.
 
 ## AGENT READ: deployment guidance
-
-Chinese documentation is available in [`README-zh.md`](README-zh.md).
 
 If you are an AI agent asked to deploy, install, refresh, troubleshoot, or register this project as a ChatGPT Web OAuth MCP server, read and follow the repository skill first:
 
