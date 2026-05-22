@@ -83,6 +83,20 @@ After local MCP is ready, explain the next human step clearly: create a Cloudfla
 
 After public verification passes, guide the user to ChatGPT Web: create a custom app/connector, use `https://<public-host>/mcp`, choose OAuth with dynamic client registration, and enter `CHATGPT_MCP_OAUTH_LOGIN_TOKEN` on the authorization page.
 
+### Token naming convention
+
+When a human says `mcp_token` while deploying this project for ChatGPT Web OAuth, treat it as the OAuth login token by default:
+
+```text
+mcp_token -> CHATGPT_MCP_OAUTH_LOGIN_TOKEN
+```
+
+Do not put the same human-provided `mcp_token` into `CHATGPT_MCP_AUTH_TOKEN` unless the human explicitly asks for a static Bearer token. Prefer generating `CHATGPT_MCP_AUTH_TOKEN` separately and keeping it for local curl smoke tests or emergency direct access. In reports, distinguish these two secrets clearly without printing either value:
+
+- `CHATGPT_MCP_OAUTH_LOGIN_TOKEN`: typed by the human on the OAuth authorization page opened by ChatGPT Web.
+- `CHATGPT_MCP_AUTH_TOKEN`: static Bearer token accepted by the MCP endpoint; useful for local curl smoke tests, not the token entered on the OAuth page.
+
+
 ## Configure `.env`
 
 The local secret file lives at:
@@ -176,7 +190,8 @@ curl -sS --max-time 10 http://127.0.0.1:8766/.well-known/oauth-authorization-ser
 
 Expected:
 
-- `/mcp` returns an HTTP response from uvicorn, usually `204 No Content` for `HEAD`.
+- `HEAD /mcp` returns an HTTP response from uvicorn, usually `204 No Content`; this is a health-check path and does not prove OAuth POST access.
+- Unauthenticated real MCP requests such as `POST /mcp` should return `401` with a `WWW-Authenticate` challenge in OAuth mode.
 - `resource` is `https://<public-host>/mcp`.
 - `issuer`, `authorization_endpoint`, `token_endpoint`, and `registration_endpoint` all use `https://<public-host>`.
 
@@ -193,7 +208,8 @@ curl -sSI --max-time 20 "$PUBLIC_BASE_URL/mcp" | sed -n '1,30p'
 Expected:
 
 - Public metadata returns JSON.
-- Public `/mcp` reaches the local MCP server through Cloudflare.
+- Public `HEAD /mcp` reaches the local MCP server through Cloudflare, usually as `204 No Content`.
+- Public unauthenticated MCP requests still require OAuth/Bearer auth; do not treat a `401` on a real request as a tunnel failure.
 - Returned OAuth URLs match exactly the same public hostname ChatGPT Web will use.
 
 If public HTTPS fails before reaching the MCP server, inspect DNS/TLS first:
@@ -270,21 +286,23 @@ Then verify local and public metadata again. The metadata must show the new host
 
 1. **Using `launchd-reload.sh` after changing `.env`.** HUP reloads code but does not rewrite launchd environment variables. Rerun `install-launchd.sh --mcp-only`.
 
-2. **Starting two cloudflared managers.** If an external tunnel already exists, do not run the full launchd installer. Use `--mcp-only`.
+2. **Ambiguous `mcp_token`.** In ChatGPT Web OAuth deployment, map `mcp_token` to `CHATGPT_MCP_OAUTH_LOGIN_TOKEN`. Generate `CHATGPT_MCP_AUTH_TOKEN` separately unless the human explicitly asks for a static Bearer token.
 
-3. **Old hostname in metadata.** This means the running launchd plist still has the old `CHATGPT_MCP_PUBLIC_BASE_URL`. Reinstall MCP launchd services.
+3. **Starting two cloudflared managers.** If an external tunnel already exists, do not run the full launchd installer. Use `--mcp-only`.
 
-4. **Public HTTPS handshake failure.** If local endpoints are OK but public `curl -vI https://<host>/mcp` fails in TLS handshake, fix Cloudflare SSL/Universal SSL/custom certificate coverage first.
+4. **Old hostname in metadata.** This means the running launchd plist still has the old `CHATGPT_MCP_PUBLIC_BASE_URL`. Reinstall MCP launchd services.
 
-5. **Testing only `/mcp`.** OAuth registration also requires both well-known metadata endpoints to return the same public host.
+5. **Public HTTPS handshake failure.** If local endpoints are OK but public `curl -vI https://<host>/mcp` fails in TLS handshake, fix Cloudflare SSL/Universal SSL/custom certificate coverage first.
 
-6. **ChatGPT posts to `/` after OAuth.** If logs show `POST /` returning `404 Not Found` right after `POST /oauth/token 200 OK`, add or verify the root compatibility alias that rewrites `/` to `/mcp`.
+6. **Testing only `/mcp`.** OAuth registration also requires both well-known metadata endpoints to return the same public host. Also distinguish `HEAD /mcp` health checks from authenticated MCP POST/GET requests.
 
-7. **Obsidian native MCP tools missing.** This is expected when `CHATGPT_MCP_ENABLE_OBSIDIAN=0`; the tools are opt-in and use the `obsidian_*` prefix when enabled. If enabled but missing, rerun `install-launchd.sh --mcp-only` so launchd receives the new environment.
+7. **ChatGPT posts to `/` after OAuth.** If logs show `POST /` returning `404 Not Found` right after `POST /oauth/token 200 OK`, add or verify the root compatibility alias that rewrites `/` to `/mcp`.
 
-8. **Obsidian native MCP tools visible but failing.** They require the Obsidian Local REST API plugin to be running, `OBSIDIAN_MCP_URL` to point at its `/mcp/` endpoint, and `OBSIDIAN_API_KEY` to be present in the launchd environment. After editing `.env`, rerun `install-launchd.sh --mcp-only`.
+8. **Obsidian native MCP tools missing.** This is expected when `CHATGPT_MCP_ENABLE_OBSIDIAN=0`; the tools are opt-in and use the `obsidian_*` prefix when enabled. If enabled but missing, rerun `install-launchd.sh --mcp-only` so launchd receives the new environment.
 
-9. **Leaking secrets while debugging.** Redact token values when printing `.env`, process args, or logs.
+9. **Obsidian native MCP tools visible but failing.** They require the Obsidian Local REST API plugin to be running, `OBSIDIAN_MCP_URL` to point at its `/mcp/` endpoint, and `OBSIDIAN_API_KEY` to be present in the launchd environment. After editing `.env`, rerun `install-launchd.sh --mcp-only`.
+
+10. **Leaking secrets while debugging.** Redact token values when printing `.env`, process args, or logs.
 
 ## Verification Checklist
 
@@ -294,8 +312,11 @@ Then verify local and public metadata again. The metadata must show the new host
 - [ ] Obsidian opt-in decision is recorded; if disabled, `CHATGPT_MCP_ENABLE_OBSIDIAN=0` and no `obsidian_*` tools appear.
 - [ ] `./scripts/install-launchd.sh --mcp-only` completed successfully.
 - [ ] `launchd-status.sh` says cloudflared is external / not managed.
-- [ ] Local `/mcp` responds on `127.0.0.1:8766`.
+- [ ] `mcp_token`, if provided by the human, is stored as `CHATGPT_MCP_OAUTH_LOGIN_TOKEN`; `CHATGPT_MCP_AUTH_TOKEN` is separate unless explicitly requested.
+- [ ] Local `HEAD /mcp` responds on `127.0.0.1:8766`.
+- [ ] Local unauthenticated real MCP requests require OAuth/Bearer auth.
 - [ ] Local OAuth metadata shows the public hostname.
 - [ ] Public OAuth metadata shows the same hostname.
-- [ ] Public `/mcp` reaches the MCP server over HTTPS.
+- [ ] Public `HEAD /mcp` reaches the MCP server over HTTPS.
 - [ ] ChatGPT Web is configured with `https://<public-host>/mcp` and OAuth dynamic registration.
+- [ ] If `launchd-status.sh` shows watchdog as `not running`, confirm it is a timer-style periodic job rather than a failed long-lived daemon before treating it as an error.

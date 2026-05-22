@@ -6,6 +6,16 @@
 
 这个版本已经剥离原项目中的 Notion 专用工作流、说明文档、截图资源和提示词，只保留 ChatGPT Web OAuth MCP 适配与本地操作工具。
 
+## AGENT READ：部署指导
+
+如果你是 AI Agent，并且被要求部署、安装、刷新、排障或注册这个项目作为 ChatGPT Web OAuth MCP server，必须先阅读并遵循仓库内的部署 skill：
+
+```text
+skills/agents-deployment/SKILL.md
+```
+
+这个 skill 是本项目部署时的运行手册，覆盖关键决策：OAuth token 应该写入哪个变量、已有 Cloudflare Tunnel 与项目托管 tunnel 的区别、macOS `launchd` 安装、端点验证，以及 ChatGPT Web 注册流程。不要只根据 README 进行部署操作。
+
 ## 上游项目来源
 
 本项目基于 [`catoncat/notion-local-ops-mcp`](https://github.com/catoncat/notion-local-ops-mcp) 剥离和改造而来。
