@@ -19,7 +19,13 @@ ChatGPT Web ──OAuth + HTTPS──▶ FastMCP Server (uvicorn)
 
 ```text
 src/chatgpt_web_oauth_mcp/
-├── server.py      # FastMCP app, tool registration, uvicorn entrypoint / fd-aware child
+├── server.py      # FastMCP composition, HTTP app integration, uvicorn entrypoint / fd-aware child
+├── tool_context.py # Shared runtime lookup context and MCP tool annotations
+├── tools_core.py  # server_info, cwd tools, skill discovery registration
+├── tools_files.py # list_files, search, read_text, write_file, apply_patch registration
+├── tools_git_shell.py # git_*, shell, delegate_task, task lifecycle registration
+├── tools_taskboard.py # taskboard_* tool registration
+├── tools_obsidian.py # optional obsidian_* proxy tool registration
 ├── config.py      # Env-var driven settings
 ├── oauth.py       # OAuth dynamic registration, PKCE, token store, metadata
 ├── http_compat.py # ChatGPT-compatible HTTP/OAuth/MCP compatibility layer
