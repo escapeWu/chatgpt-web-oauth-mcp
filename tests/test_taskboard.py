@@ -268,7 +268,16 @@ def test_taskboard_worktree_result_collection_uses_per_task_cwd(tmp_path: Path) 
 
     delegated = board_store.delegate(board_id=board_id, registry=registry, timeout=5)
     task_id = delegated["submitted_task_ids"][0]
-    board_store.wait(board_id=board_id, registry=registry, timeout=2, poll_interval=0.05)
+    waited = board_store.wait(
+        board_id=board_id,
+        registry=registry,
+        timeout=2,
+        poll_interval=0.05,
+        return_on="all_done",
+    )
+    assert waited["timed_out"] is False
+    assert waited["return_reason"] == "all_done"
+
     collected = board_store.collect_results(board_id=board_id, registry=registry)
     result = collected["results"][0]
 
