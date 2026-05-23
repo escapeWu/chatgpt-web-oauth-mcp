@@ -100,13 +100,18 @@ def test_supervisor_reload_keeps_mcp_endpoint_available(tmp_path: Path) -> None:
         time.sleep(0.2)
 
         os.kill(proc.pid, signal.SIGHUP)
-        time.sleep(1.2)
+        deadline = time.time() + 5.0
+        log_text = ""
+        while time.time() < deadline:
+            log_text = log_file.read_text(encoding="utf-8")
+            if log_text.count("Started server process") >= 2:
+                break
+            time.sleep(0.05)
 
         stop_polling.set()
         poller.join(timeout=5)
         assert not poller.is_alive()
         assert failures == []
-        log_text = log_file.read_text(encoding="utf-8")
         assert log_text.count("Started server process") >= 2
     finally:
         stop_polling.set()

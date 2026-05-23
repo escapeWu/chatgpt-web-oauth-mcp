@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from chatgpt_web_oauth_mcp.executors import ExecutorRegistry
+from chatgpt_web_oauth_mcp.taskboard import TaskBoardStore
 from chatgpt_web_oauth_mcp.tasks import TaskStore
 
 
@@ -284,6 +285,41 @@ def test_server_purge_tasks_dry_run_reports_candidates(tmp_path: Path) -> None:
         server.registry = old_registry
 
 
+def test_server_taskboard_tools_create_delegate_dry_run_and_list(tmp_path: Path) -> None:
+    from chatgpt_web_oauth_mcp import server
+
+    old_store = server.taskboard_store
+    try:
+        server.taskboard_store = TaskBoardStore(tmp_path / "state")
+        created = _call(
+            server.taskboard_create,
+            title="Board",
+            original_request="Create and track two manual subtasks.",
+            cwd=str(tmp_path),
+            worktree_mode="none",
+            tasks=[{"title": "One", "task": "Do one"}],
+        )
+        board_id = created["board"]["board_id"]
+        added = _call(
+            server.taskboard_add_task,
+            board_id=board_id,
+            title="Two",
+            task="Do two",
+        )
+        dry_run = _call(server.taskboard_delegate, board_id=board_id, dry_run=True, max_parallel=1)
+        listed = _call(server.taskboard_list)
+
+        assert created["success"] is True
+        assert created["board"]["status"] == "draft"
+        assert "original_request" not in created["board"]
+        assert created["board_detail"]["original_request"] == "Create and track two manual subtasks."
+        assert added["board"]["counts"]["pending"] == 2
+        assert len(dry_run["would_submit"]) == 1
+        assert listed["boards"][0]["board_id"] == board_id
+    finally:
+        server.taskboard_store = old_store
+
+
 def test_server_apply_patch_tool_description_uses_generic_patch_language() -> None:
     from chatgpt_web_oauth_mcp import server
 
@@ -331,3 +367,6 @@ def test_server_tools_expose_chatgpt_compatible_annotations() -> None:
     assert annotations["write_file"]["destructiveHint"] is True
     assert annotations["run_command"]["openWorldHint"] is True
     assert annotations["delegate_task"]["openWorldHint"] is True
+    assert annotations["taskboard_create"]["readOnlyHint"] is False
+    assert annotations["taskboard_delegate"]["openWorldHint"] is True
+    assert annotations["taskboard_status"]["readOnlyHint"] is True

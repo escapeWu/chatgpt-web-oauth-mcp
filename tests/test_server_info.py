@@ -34,6 +34,10 @@ def test_server_info_reports_metadata_and_tools() -> None:
         "delegate_task",
         "run_command_stream",
         "purge_tasks",
+        "taskboard_create",
+        "taskboard_delegate",
+        "taskboard_status",
+        "taskboard_collect_results",
     ]:
         assert name in tools, f"expected {name} in tools list"
     for removed in ["search_files", "glob_files", "grep_files", "read_file", "read_files", "replace_in_file"]:

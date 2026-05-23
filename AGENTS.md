@@ -28,6 +28,8 @@ src/chatgpt_web_oauth_mcp/
 ├── search.py      # glob/regex/text search implementations
 ├── shell.py       # run_command subprocess helper
 ├── tasks.py       # Persistent task metadata and logs
+├── taskboard.py   # Persistent lightweight TaskBoard metadata and coordination
+├── worktrees.py   # Git worktree helpers for TaskBoard isolation/result metadata
 ├── executors.py   # async delegate_task via codex / claude-code
 └── supervisor.py  # rolling-reload supervisor for tunnels / launchd
 ```
@@ -48,6 +50,7 @@ src/chatgpt_web_oauth_mcp/
 | `delegate_task` | Submit long-running tasks to codex/claude-code |
 | `get_task` / `wait_task` / `cancel_task` | Manage delegated/background tasks |
 | `purge_tasks` | GC old task logs under `STATE_DIR/tasks` |
+| `taskboard_*` tools | Persist original-request context, delegate, wait, collect, cancel, list, and purge lightweight user-decomposed task boards |
 | `obsidian_*` tools | Optional Obsidian native MCP proxy tools; only registered when `CHATGPT_MCP_ENABLE_OBSIDIAN=1` |
 
 ## Key concepts
