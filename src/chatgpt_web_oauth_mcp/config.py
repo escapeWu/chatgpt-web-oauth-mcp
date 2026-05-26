@@ -76,6 +76,10 @@ OBSIDIAN_MCP_URL = os.environ.get("OBSIDIAN_MCP_URL", "").strip()
 OBSIDIAN_VERIFY_SSL = _env_flag("OBSIDIAN_VERIFY_SSL", default=False)
 OBSIDIAN_TIMEOUT_SECONDS = int(os.environ.get("OBSIDIAN_TIMEOUT_SECONDS", "10"))
 
+TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN", "").strip()
+TG_RECEIVER_ID = os.environ.get("TG_RECEIVER_ID", "").strip()
+TG_NOTIFY_TIMEOUT_SECONDS = float(os.environ.get("TG_NOTIFY_TIMEOUT_SECONDS", "5"))
+
 
 def ensure_runtime_directories() -> None:
     if not WORKSPACE_ROOT.exists():

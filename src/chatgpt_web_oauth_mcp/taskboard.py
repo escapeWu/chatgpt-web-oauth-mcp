@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Protocol
 
 from . import worktrees
+from .notifiers import TaskBoardNotifier
 
 
 TASKBOARD_STATUSES = {"draft", "running", "completed", "failed", "cancelled"}
@@ -315,8 +316,9 @@ def _task_prompt(board: dict[str, object], task: dict[str, object], *, assigned_
 
 
 class TaskBoardStore:
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, notifier: TaskBoardNotifier | None = None) -> None:
         self.root = root
+        self.notifier = notifier
         self.board_root = self.root / "taskboards" / "boards"
         self.worktree_root = self.root / "taskboards" / "worktrees"
         self.board_root.mkdir(parents=True, exist_ok=True)
@@ -374,6 +376,19 @@ class TaskBoardStore:
             payload["to_status"] = to_status
         events.append(payload)
         board["events"] = events
+
+    def _notify_terminal_transition(self, board: dict[str, object], task: dict[str, object]) -> None:
+        if self.notifier is None:
+            return
+        try:
+            self.notifier.notify_task_terminal(board=board, task=task)
+        except Exception as exc:
+            self._event(
+                board,
+                event="telegram_notify_failed",
+                task_id=str(task.get("task_id") or ""),
+                message=f"Telegram notification failed ({exc.__class__.__name__}).",
+            )
 
     def create(
         self,
@@ -592,6 +607,8 @@ class TaskBoardStore:
                             to_status="failed",
                             message=str(prepared.get("error", {}).get("message") if isinstance(prepared.get("error"), dict) else "worktree preparation failed"),
                         )
+                        if previous not in TERMINAL_SUBTASK_STATUSES:
+                            self._notify_terminal_transition(board, task)
                         continue
                     worker_cwd = Path(str(prepared["worktree_path"]))
 
@@ -623,6 +640,8 @@ class TaskBoardStore:
                         to_status="failed",
                         message=str(exc),
                     )
+                    if previous not in TERMINAL_SUBTASK_STATUSES:
+                        self._notify_terminal_transition(board, task)
                     continue
 
                 previous = str(task.get("status") or "pending")
@@ -640,6 +659,8 @@ class TaskBoardStore:
                     to_status=str(task["status"]),
                     message=f"Delegated as {task.get('delegate_task_id')}.",
                 )
+                if previous not in TERMINAL_SUBTASK_STATUSES and str(task["status"]) in TERMINAL_SUBTASK_STATUSES:
+                    self._notify_terminal_transition(board, task)
 
             if submitted and not board.get("started_at"):
                 board["started_at"] = _now()
@@ -708,6 +729,8 @@ class TaskBoardStore:
                         from_status=previous,
                         to_status=current,
                     )
+                    if previous not in TERMINAL_SUBTASK_STATUSES and current in TERMINAL_SUBTASK_STATUSES:
+                        self._notify_terminal_transition(board, task)
 
             new_status = _compute_board_status(board)
             if new_status in {"completed", "failed", "cancelled"} and not board.get("completed_at"):
@@ -959,6 +982,8 @@ class TaskBoardStore:
                     from_status=previous,
                     to_status="cancelled",
                 )
+                if previous not in TERMINAL_SUBTASK_STATUSES:
+                    self._notify_terminal_transition(board, task)
             if not task_ids:
                 board["cancelled_at"] = _now()
             self._save(board)

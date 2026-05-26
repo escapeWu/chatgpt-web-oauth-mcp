@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
 from chatgpt_web_oauth_mcp.executors import ExecutorRegistry
+from chatgpt_web_oauth_mcp.notifiers import (
+    TelegramTaskBoardNotifier,
+    build_telegram_notifier,
+    format_taskboard_terminal_message,
+)
 from chatgpt_web_oauth_mcp.taskboard import TaskBoardStore
 from chatgpt_web_oauth_mcp.tasks import TaskStore
 
@@ -83,6 +89,19 @@ class CapturingRegistry:
         self.meta[task_id]["status"] = "cancelled"
         self.meta[task_id]["completed"] = True
         return {"task_id": task_id, "status": "cancelled", "cancelled": True}
+
+
+class RecordingNotifier:
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+
+    def notify_task_terminal(self, *, board: dict[str, object], task: dict[str, object]) -> None:
+        self.messages.append(format_taskboard_terminal_message(board=board, task=task))
+
+
+class FailingNotifier:
+    def notify_task_terminal(self, *, board: dict[str, object], task: dict[str, object]) -> None:
+        raise RuntimeError("secret-token must not leak")
 
 
 def test_taskboard_create_persists_pending_tasks_without_delegating(tmp_path: Path) -> None:
@@ -290,6 +309,158 @@ def test_taskboard_worktree_result_collection_uses_per_task_cwd(tmp_path: Path) 
     assert (Path(result["worktree_path"]) / "file.txt").read_text(encoding="utf-8") == "changed\n"
     assert result["changed_files"] == ["file.txt"]
     assert "file.txt" in result["diff_summary"]
+
+
+def test_taskboard_refresh_notifies_once_on_terminal_transition(tmp_path: Path) -> None:
+    notifier = RecordingNotifier()
+    board_store = TaskBoardStore(tmp_path / "state", notifier=notifier)
+    registry = CapturingRegistry()
+    created = board_store.create(
+        title="Notify board",
+        tasks=[
+            {"title": "Alpha", "task": "Finish alpha"},
+            {"title": "Beta", "task": "Keep beta queued"},
+        ],
+        cwd=str(tmp_path),
+        workspace_root=tmp_path,
+        worktree_mode="none",
+        max_parallel=2,
+    )
+    board_id = str(created["board"]["board_id"])
+    board_store.delegate(board_id=board_id, registry=registry, timeout=5)
+    board = board_store.get(board_id)
+    first = board["tasks"][0]
+    second = board["tasks"][1]
+    registry.meta[str(first["delegate_task_id"])].update(
+        {
+            "status": "succeeded",
+            "summary": "Alpha done.",
+            "updated_at": "2026-01-01T00:00:01+00:00",
+            "completed": True,
+        }
+    )
+
+    refreshed = board_store.refresh(board_id=board_id, registry=registry, save=True)
+    board_store.refresh(board_id=board_id, registry=registry, save=True)
+
+    assert refreshed["changed_tasks"][0]["status"] == "succeeded"
+    assert len(notifier.messages) == 1
+    message = notifier.messages[0]
+    assert "TaskBoard task succeeded" in message
+    assert f"Current task: [x] Alpha ({first['task_id']}) - succeeded" in message
+    assert f"Board: Notify board ({board_id})" in message
+    assert f"[x] Alpha ({first['task_id']}) - succeeded" in message
+    assert f"[ ] Beta ({second['task_id']}) - queued" in message
+
+
+def test_taskboard_refresh_swallow_notify_failure_and_records_safe_event(tmp_path: Path) -> None:
+    board_store = TaskBoardStore(tmp_path / "state", notifier=FailingNotifier())
+    registry = CapturingRegistry()
+    created = board_store.create(
+        title="Failure board",
+        tasks=[{"title": "Break", "task": "Fail cleanly"}],
+        cwd=str(tmp_path),
+        workspace_root=tmp_path,
+        worktree_mode="none",
+    )
+    board_id = str(created["board"]["board_id"])
+    board_store.delegate(board_id=board_id, registry=registry, timeout=5)
+    board = board_store.get(board_id)
+    task = board["tasks"][0]
+    registry.meta[str(task["delegate_task_id"])].update(
+        {
+            "status": "failed",
+            "updated_at": "2026-01-01T00:00:01+00:00",
+            "completed": True,
+        }
+    )
+
+    refreshed = board_store.refresh(board_id=board_id, registry=registry, save=True)
+    events = refreshed["board"]["events"]
+    failure_events = [event for event in events if event.get("event") == "telegram_notify_failed"]
+
+    assert refreshed["changed_tasks"][0]["status"] == "failed"
+    assert refreshed["board"]["status"] == "failed"
+    assert len(failure_events) == 1
+    assert failure_events[0]["task_id"] == task["task_id"]
+    assert "RuntimeError" in str(failure_events[0].get("message"))
+    assert "secret-token" not in json.dumps(failure_events)
+
+
+def test_format_taskboard_terminal_message_uses_status_checkboxes() -> None:
+    board = {
+        "board_id": "board-1",
+        "title": "Checklist board",
+        "tasks": [
+            {"task_id": "ok", "title": "Done", "status": "succeeded"},
+            {"task_id": "todo", "title": "Todo", "status": "pending"},
+            {"task_id": "queued", "title": "Queued", "status": "queued"},
+            {"task_id": "active", "title": "Active", "status": "running"},
+            {"task_id": "bad", "title": "Bad", "status": "failed"},
+            {"task_id": "stop", "title": "Stop", "status": "cancelled"},
+        ],
+    }
+    message = format_taskboard_terminal_message(board=board, task=board["tasks"][4])
+
+    assert "Current task: [!] Bad (bad) - failed" in message
+    assert "Board: Checklist board (board-1)" in message
+    assert "[x] Done (ok) - succeeded" in message
+    assert "[ ] Todo (todo) - pending" in message
+    assert "[ ] Queued (queued) - queued" in message
+    assert "[ ] Active (active) - running" in message
+    assert "[!] Bad (bad) - failed" in message
+    assert "[-] Stop (stop) - cancelled" in message
+
+
+def test_build_telegram_notifier_requires_token_and_receiver() -> None:
+    assert build_telegram_notifier(bot_token="", receiver_id="chat") is None
+    assert build_telegram_notifier(bot_token="token", receiver_id="") is None
+    assert build_telegram_notifier(bot_token="token", receiver_id="chat") is not None
+
+
+def test_telegram_notifier_posts_send_message_json_without_markdown(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        def read(self) -> bytes:
+            return b'{"ok":true}'
+
+        def close(self) -> None:
+            captured["closed"] = True
+
+    def fake_urlopen(request, *, timeout):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(
+        "chatgpt_web_oauth_mcp.notifiers.urllib.request.urlopen",
+        fake_urlopen,
+    )
+    notifier = TelegramTaskBoardNotifier(
+        bot_token="unit-test-token",
+        receiver_id="unit-test-chat",
+        timeout_seconds=1.25,
+    )
+    board = {
+        "board_id": "board-1",
+        "title": "Notify",
+        "tasks": [{"task_id": "task-1", "title": "Done", "status": "succeeded"}],
+    }
+
+    notifier.notify_task_terminal(board=board, task=board["tasks"][0])
+
+    request = captured["request"]
+    body = json.loads(request.data.decode("utf-8"))
+    assert request.full_url == "https://api.telegram.org/botunit-test-token/sendMessage"
+    assert request.get_method() == "POST"
+    assert request.get_header("Content-type") == "application/json"
+    assert captured["timeout"] == 1.25
+    assert captured["closed"] is True
+    assert body["chat_id"] == "unit-test-chat"
+    assert body["disable_web_page_preview"] is True
+    assert "parse_mode" not in body
+    assert "TaskBoard checklist:" in body["text"]
 
 
 def test_taskboard_delegate_prompt_includes_board_worktree_and_safety_context(tmp_path: Path) -> None:
