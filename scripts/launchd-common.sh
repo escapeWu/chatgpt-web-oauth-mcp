@@ -161,6 +161,9 @@ prepare_launchd_env() {
   local override_obsidian_mcp_url="${OBSIDIAN_MCP_URL:-}"
   local override_obsidian_verify_ssl="${OBSIDIAN_VERIFY_SSL:-}"
   local override_obsidian_timeout_seconds="${OBSIDIAN_TIMEOUT_SECONDS:-}"
+  local override_tg_bot_token="${TG_BOT_TOKEN:-}"
+  local override_tg_receiver_id="${TG_RECEIVER_ID:-}"
+  local override_tg_notify_timeout_seconds="${TG_NOTIFY_TIMEOUT_SECONDS:-}"
 
   load_env_file
 
@@ -192,6 +195,8 @@ prepare_launchd_env() {
   export OBSIDIAN_MCP_URL="${override_obsidian_mcp_url:-${OBSIDIAN_MCP_URL:-}}"
   export OBSIDIAN_VERIFY_SSL="${override_obsidian_verify_ssl:-${OBSIDIAN_VERIFY_SSL:-0}}"
   export OBSIDIAN_TIMEOUT_SECONDS="${override_obsidian_timeout_seconds:-${OBSIDIAN_TIMEOUT_SECONDS:-10}}"
+  export TG_RECEIVER_ID="${override_tg_receiver_id:-${TG_RECEIVER_ID:-}}"
+  export TG_NOTIFY_TIMEOUT_SECONDS="${override_tg_notify_timeout_seconds:-${TG_NOTIFY_TIMEOUT_SECONDS:-5}}"
 
   if [[ -n "${override_auth_token}" ]]; then
     export CHATGPT_MCP_AUTH_TOKEN="${override_auth_token}"
@@ -200,6 +205,11 @@ prepare_launchd_env() {
     export OBSIDIAN_API_KEY="${override_obsidian_api_key}"
   elif [[ -n "${OBSIDIAN_API_KEY:-}" ]]; then
     export OBSIDIAN_API_KEY
+  fi
+  if [[ -n "${override_tg_bot_token}" ]]; then
+    export TG_BOT_TOKEN="${override_tg_bot_token}"
+  elif [[ -n "${TG_BOT_TOKEN:-}" ]]; then
+    export TG_BOT_TOKEN
   fi
 }
 
