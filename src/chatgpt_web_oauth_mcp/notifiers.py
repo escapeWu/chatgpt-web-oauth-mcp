@@ -6,6 +6,11 @@ from dataclasses import dataclass
 from typing import Mapping, Protocol
 
 
+TELEGRAM_MESSAGE_MAX_CHARS = 4096
+_TRUNCATION_NOTICE_RESERVE = 96
+_LINE_MAX_CHARS = 240
+
+
 class TaskBoardNotifier(Protocol):
     def notify_task_terminal(
         self,
@@ -31,6 +36,16 @@ def _task_marker(status: object | None) -> str:
     return "[ ]"
 
 
+def _clip_line(text: str, max_chars: int = _LINE_MAX_CHARS) -> str:
+    if len(text) <= max_chars:
+        return text
+    return f"{text[: max(max_chars - 1, 0)]}…"
+
+
+def _truncation_notice(omitted_count: int) -> str:
+    return f"… truncated {omitted_count} task(s) to fit Telegram's 4096 character limit"
+
+
 def format_taskboard_terminal_message(
     *,
     board: Mapping[str, object],
@@ -44,19 +59,23 @@ def format_taskboard_terminal_message(
 
     lines = [
         f"TaskBoard task {task_status}",
-        f"Current task: {_task_marker(task_status)} {task_title} ({task_id}) - {task_status}",
-        f"Board: {board_title} ({board_id})",
+        _clip_line(f"Current task: {_task_marker(task_status)} {task_title} ({task_id}) - {task_status}"),
+        _clip_line(f"Board: {board_title} ({board_id})"),
         "",
         "TaskBoard checklist:",
     ]
-    for item in list(board.get("tasks") or []):
-        if not isinstance(item, Mapping):
-            continue
+    items = [item for item in list(board.get("tasks") or []) if isinstance(item, Mapping)]
+    for index, item in enumerate(items):
         item_status = _one_line(item.get("status"), default="pending")
         item_title = _one_line(item.get("title"), default="Untitled task")
         item_id = _one_line(item.get("task_id"), default="unknown")
-        lines.append(f"{_task_marker(item_status)} {item_title} ({item_id}) - {item_status}")
-    return "\n".join(lines)
+        line = _clip_line(f"{_task_marker(item_status)} {item_title} ({item_id}) - {item_status}")
+        candidate = lines + [line]
+        if len("\n".join(candidate)) > TELEGRAM_MESSAGE_MAX_CHARS - _TRUNCATION_NOTICE_RESERVE:
+            lines.append(_truncation_notice(len(items) - index))
+            break
+        lines.append(line)
+    return "\n".join(lines)[:TELEGRAM_MESSAGE_MAX_CHARS]
 
 
 @dataclass(frozen=True)

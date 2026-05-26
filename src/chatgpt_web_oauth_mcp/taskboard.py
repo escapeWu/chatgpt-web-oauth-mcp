@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import shutil
 import threading
@@ -377,18 +378,33 @@ class TaskBoardStore:
         events.append(payload)
         board["events"] = events
 
-    def _notify_terminal_transition(self, board: dict[str, object], task: dict[str, object]) -> None:
-        if self.notifier is None:
-            return
-        try:
-            self.notifier.notify_task_terminal(board=board, task=task)
-        except Exception as exc:
-            self._event(
-                board,
-                event="telegram_notify_failed",
-                task_id=str(task.get("task_id") or ""),
-                message=f"Telegram notification failed ({exc.__class__.__name__}).",
-            )
+    def _terminal_notification_payload(self, board: dict[str, object], task: dict[str, object]) -> dict[str, dict[str, object]]:
+        return {"board": copy.deepcopy(board), "task": copy.deepcopy(task)}
+
+    def _dispatch_terminal_notifications(
+        self,
+        *,
+        board_id: str,
+        notifications: list[dict[str, dict[str, object]]],
+    ) -> dict[str, object] | None:
+        if self.notifier is None or not notifications:
+            return None
+        latest_board: dict[str, object] | None = None
+        for notification in notifications:
+            task = notification["task"]
+            try:
+                self.notifier.notify_task_terminal(board=notification["board"], task=task)
+            except Exception as exc:
+                with self._lock:
+                    board = self.get(board_id)
+                    self._event(
+                        board,
+                        event="telegram_notify_failed",
+                        task_id=str(task.get("task_id") or ""),
+                        message=f"Telegram notification failed ({exc.__class__.__name__}).",
+                    )
+                    latest_board = self._save(board)
+        return latest_board
 
     def create(
         self,
@@ -561,9 +577,9 @@ class TaskBoardStore:
         max_parallel: int | None = None,
         dry_run: bool = False,
     ) -> dict[str, object]:
+        notifications: list[dict[str, dict[str, object]]] = []
+        self.refresh(board_id=board_id, registry=registry, save=True)
         with self._lock:
-            board = self.get(board_id)
-            self.refresh(board_id=board_id, registry=registry, save=True, board=board)
             board = self.get(board_id)
 
             effective_max = max(int(max_parallel or board.get("max_parallel") or DEFAULT_MAX_PARALLEL), 1)
@@ -608,7 +624,7 @@ class TaskBoardStore:
                             message=str(prepared.get("error", {}).get("message") if isinstance(prepared.get("error"), dict) else "worktree preparation failed"),
                         )
                         if previous not in TERMINAL_SUBTASK_STATUSES:
-                            self._notify_terminal_transition(board, task)
+                            notifications.append(self._terminal_notification_payload(board, task))
                         continue
                     worker_cwd = Path(str(prepared["worktree_path"]))
 
@@ -641,7 +657,7 @@ class TaskBoardStore:
                         message=str(exc),
                     )
                     if previous not in TERMINAL_SUBTASK_STATUSES:
-                        self._notify_terminal_transition(board, task)
+                        notifications.append(self._terminal_notification_payload(board, task))
                     continue
 
                 previous = str(task.get("status") or "pending")
@@ -660,18 +676,23 @@ class TaskBoardStore:
                     message=f"Delegated as {task.get('delegate_task_id')}.",
                 )
                 if previous not in TERMINAL_SUBTASK_STATUSES and str(task["status"]) in TERMINAL_SUBTASK_STATUSES:
-                    self._notify_terminal_transition(board, task)
+                    notifications.append(self._terminal_notification_payload(board, task))
 
             if submitted and not board.get("started_at"):
                 board["started_at"] = _now()
             self._save(board)
+
+        active_count = len([task for task in board.get("tasks", []) if str(task.get("status")) in ACTIVE_SUBTASK_STATUSES])
+        latest_board = self._dispatch_terminal_notifications(board_id=board_id, notifications=notifications)
+        if latest_board is not None:
+            board = latest_board
 
         return self._response(
             board,
             submitted_task_ids=submitted,
             failed_tasks=failed,
             max_parallel=effective_max,
-            active_count=len([task for task in board.get("tasks", []) if str(task.get("status")) in ACTIVE_SUBTASK_STATUSES]),
+            active_count=active_count,
             capacity=capacity,
             dry_run=False,
         )
@@ -696,6 +717,7 @@ class TaskBoardStore:
         save: bool = True,
         board: dict[str, object] | None = None,
     ) -> dict[str, object]:
+        notifications: list[dict[str, dict[str, object]]] = []
         with self._lock:
             board = board or self.get(board_id)
             changed: list[dict[str, object]] = []
@@ -730,7 +752,7 @@ class TaskBoardStore:
                         to_status=current,
                     )
                     if previous not in TERMINAL_SUBTASK_STATUSES and current in TERMINAL_SUBTASK_STATUSES:
-                        self._notify_terminal_transition(board, task)
+                        notifications.append(self._terminal_notification_payload(board, task))
 
             new_status = _compute_board_status(board)
             if new_status in {"completed", "failed", "cancelled"} and not board.get("completed_at"):
@@ -738,7 +760,11 @@ class TaskBoardStore:
             board["status"] = new_status
             if save:
                 self._save(board)
-            return {"board": board, "changed_tasks": changed}
+            result = {"board": board, "changed_tasks": changed}
+        latest_board = self._dispatch_terminal_notifications(board_id=board_id, notifications=notifications)
+        if latest_board is not None:
+            result["board"] = latest_board
+        return result
 
     def status(
         self,
@@ -956,6 +982,7 @@ class TaskBoardStore:
         task_ids: list[str] | None = None,
         event_limit: int = DEFAULT_EVENT_LIMIT,
     ) -> dict[str, object]:
+        notifications: list[dict[str, dict[str, object]]] = []
         with self._lock:
             board = self.get(board_id)
             selected = self._selected_tasks(board, task_ids)
@@ -983,10 +1010,13 @@ class TaskBoardStore:
                     to_status="cancelled",
                 )
                 if previous not in TERMINAL_SUBTASK_STATUSES:
-                    self._notify_terminal_transition(board, task)
+                    notifications.append(self._terminal_notification_payload(board, task))
             if not task_ids:
                 board["cancelled_at"] = _now()
             self._save(board)
+        latest_board = self._dispatch_terminal_notifications(board_id=board_id, notifications=notifications)
+        if latest_board is not None:
+            board = latest_board
         return self._response(board, cancelled_task_ids=cancelled, cancel_errors=errors, event_limit=event_limit)
 
     def list_boards(

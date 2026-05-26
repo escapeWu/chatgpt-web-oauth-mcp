@@ -94,8 +94,12 @@ class CapturingRegistry:
 class RecordingNotifier:
     def __init__(self) -> None:
         self.messages: list[str] = []
+        self.lock_states: list[bool] = []
+        self.lock_probe = None
 
     def notify_task_terminal(self, *, board: dict[str, object], task: dict[str, object]) -> None:
+        if self.lock_probe is not None:
+            self.lock_states.append(bool(self.lock_probe()))
         self.messages.append(format_taskboard_terminal_message(board=board, task=task))
 
 
@@ -353,6 +357,37 @@ def test_taskboard_refresh_notifies_once_on_terminal_transition(tmp_path: Path) 
     assert f"[ ] Beta ({second['task_id']}) - queued" in message
 
 
+def test_taskboard_refresh_sends_terminal_notifications_after_releasing_lock(tmp_path: Path) -> None:
+    notifier = RecordingNotifier()
+    board_store = TaskBoardStore(tmp_path / "state", notifier=notifier)
+    notifier.lock_probe = board_store._lock._is_owned
+    registry = CapturingRegistry()
+    created = board_store.create(
+        title="Unlocked board",
+        tasks=[{"title": "Alpha", "task": "Finish alpha"}],
+        cwd=str(tmp_path),
+        workspace_root=tmp_path,
+        worktree_mode="none",
+    )
+    board_id = str(created["board"]["board_id"])
+    board_store.delegate(board_id=board_id, registry=registry, timeout=5)
+    board = board_store.get(board_id)
+    task = board["tasks"][0]
+    registry.meta[str(task["delegate_task_id"])].update(
+        {
+            "status": "succeeded",
+            "summary": "Alpha done.",
+            "updated_at": "2026-01-01T00:00:01+00:00",
+            "completed": True,
+        }
+    )
+
+    board_store.refresh(board_id=board_id, registry=registry, save=True)
+
+    assert notifier.messages
+    assert notifier.lock_states == [False]
+
+
 def test_taskboard_refresh_swallow_notify_failure_and_records_safe_event(tmp_path: Path) -> None:
     board_store = TaskBoardStore(tmp_path / "state", notifier=FailingNotifier())
     registry = CapturingRegistry()
@@ -410,6 +445,22 @@ def test_format_taskboard_terminal_message_uses_status_checkboxes() -> None:
     assert "[ ] Active (active) - running" in message
     assert "[!] Bad (bad) - failed" in message
     assert "[-] Stop (stop) - cancelled" in message
+
+
+def test_format_taskboard_terminal_message_caps_telegram_payload_length() -> None:
+    board = {
+        "board_id": "board-1",
+        "title": "Long board",
+        "tasks": [
+            {"task_id": f"task-{index}", "title": "Very long task title " * 20, "status": "pending"}
+            for index in range(400)
+        ],
+    }
+
+    message = format_taskboard_terminal_message(board=board, task=board["tasks"][0])
+
+    assert len(message) <= 4096
+    assert "truncated" in message
 
 
 def test_build_telegram_notifier_requires_token_and_receiver() -> None:
