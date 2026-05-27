@@ -20,6 +20,9 @@ dependencies = [
 dev = [
     "pytest>=8.0.0",
 ]
+notebooklm = [
+    "notebooklm-py>=0.5.0,<1",
+]
 
 [project.scripts]
 chatgpt-web-oauth-mcp = "chatgpt_web_oauth_mcp.server:main"

@@ -76,9 +76,15 @@ OBSIDIAN_MCP_URL = os.environ.get("OBSIDIAN_MCP_URL", "").strip()
 OBSIDIAN_VERIFY_SSL = _env_flag("OBSIDIAN_VERIFY_SSL", default=False)
 OBSIDIAN_TIMEOUT_SECONDS = int(os.environ.get("OBSIDIAN_TIMEOUT_SECONDS", "10"))
 
-TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN", "").strip()
-TG_RECEIVER_ID = os.environ.get("TG_RECEIVER_ID", "").strip()
-TG_NOTIFY_TIMEOUT_SECONDS = float(os.environ.get("TG_NOTIFY_TIMEOUT_SECONDS", "5"))
+ENABLE_NOTEBOOKLM = _env_flag("CHATGPT_MCP_ENABLE_NOTEBOOKLM", default=False)
+NOTEBOOKLM_STORAGE_PATH = os.environ.get("NOTEBOOKLM_STORAGE_PATH", "").strip()
+NOTEBOOKLM_PROFILE = os.environ.get("NOTEBOOKLM_PROFILE", "").strip()
+NOTEBOOKLM_DEFAULT_NOTEBOOK_ID = (
+    os.environ.get("CHATGPT_MCP_NOTEBOOKLM_DEFAULT_NOTEBOOK_ID")
+    or os.environ.get("NOTEBOOKLM_NOTEBOOK")
+    or ""
+).strip()
+NOTEBOOKLM_TIMEOUT_SECONDS = int(os.environ.get("NOTEBOOKLM_TIMEOUT_SECONDS", "30"))
 
 
 def ensure_runtime_directories() -> None:

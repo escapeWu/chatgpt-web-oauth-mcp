@@ -57,6 +57,7 @@ def register_core_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             registered = await list_tools(None)
         tools = sorted(tool.name for tool in registered)
         session_cwd = session.get_default_cwd()
+        notebooklm_config = ctx.current_notebooklm_config()
         return {
             "success": True,
             "app_name": ctx.app_name,
@@ -77,6 +78,16 @@ def register_core_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
                 "mcp_url": ctx.current_obsidian_config().mcp_url,
                 "mode": "native_mcp_proxy",
                 "tool_prefix": "obsidian_",
+            },
+            "notebooklm": {
+                "enabled": ctx.enable_notebooklm,
+                "configured": bool(notebooklm_config.configured),
+                "mode": "notebooklm_py_wrapper",
+                "storage_path": notebooklm_config.storage_path or None,
+                "profile": notebooklm_config.profile or None,
+                "default_notebook_id": notebooklm_config.default_notebook_id or None,
+                "timeout_seconds": notebooklm_config.timeout_seconds,
+                "tool_prefix": "notebooklm_",
             },
             "tools": tools,
             "tool_count": len(tools),
