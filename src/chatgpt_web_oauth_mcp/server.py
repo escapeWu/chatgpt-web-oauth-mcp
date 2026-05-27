@@ -17,8 +17,13 @@ from .config import (
     DEBUG_MCP_LOGGING,
     DELEGATE_TIMEOUT,
     ENABLE_OBSIDIAN,
+    ENABLE_NOTEBOOKLM,
     GRACEFUL_SHUTDOWN_SECONDS,
     HOST,
+    NOTEBOOKLM_DEFAULT_NOTEBOOK_ID,
+    NOTEBOOKLM_PROFILE,
+    NOTEBOOKLM_STORAGE_PATH,
+    NOTEBOOKLM_TIMEOUT_SECONDS,
     OAUTH_LOGIN_TOKEN,
     OAUTH_SCOPES,
     OAUTH_TOKEN_TTL_SECONDS,
@@ -40,6 +45,12 @@ from .config import (
 )
 from .executors import ExecutorRegistry
 from .http_compat import build_http_compat_app
+from .notebooklm import (
+    NotebookLMConfig,
+    NotebookLMConfigError,
+    create_client as create_notebooklm_client,
+    proxy_error as notebooklm_proxy_error,
+)
 from .notifiers import build_telegram_notifier
 from .oauth import OAuthRuntimeConfig
 from .obsidian import (
@@ -55,6 +66,7 @@ from .tool_context import ToolContext
 from .tools_core import register_core_tools
 from .tools_files import register_file_tools
 from .tools_git_shell import register_git_shell_tools
+from .tools_notebooklm import register_notebooklm_tools
 from .tools_obsidian import register_obsidian_tools
 from .tools_taskboard import register_taskboard_tools
 
@@ -127,6 +139,16 @@ def _current_obsidian_config() -> ObsidianMCPConfig:
     )
 
 
+def _current_notebooklm_config() -> NotebookLMConfig:
+    return NotebookLMConfig(
+        enabled=bool(globals().get("ENABLE_NOTEBOOKLM", False)),
+        storage_path=globals().get("NOTEBOOKLM_STORAGE_PATH", "") or "",
+        profile=globals().get("NOTEBOOKLM_PROFILE", "") or "",
+        default_notebook_id=globals().get("NOTEBOOKLM_DEFAULT_NOTEBOOK_ID", "") or "",
+        timeout_seconds=int(globals().get("NOTEBOOKLM_TIMEOUT_SECONDS", 30) or 30),
+    )
+
+
 def _global_value(name: str, default: Any = None) -> Any:
     return globals().get(name, default)
 
@@ -135,6 +157,7 @@ _tool_context = ToolContext(
     global_value=_global_value,
     current_oauth_config=_current_oauth_config,
     current_obsidian_config=_current_obsidian_config,
+    current_notebooklm_config=_current_notebooklm_config,
 )
 
 _tool_exports: dict[str, object] = {}
@@ -143,6 +166,7 @@ _tool_exports.update(register_file_tools(mcp, _tool_context))
 _tool_exports.update(register_git_shell_tools(mcp, _tool_context))
 _tool_exports.update(register_taskboard_tools(mcp, _tool_context))
 _tool_exports.update(register_obsidian_tools(mcp, _tool_context))
+_tool_exports.update(register_notebooklm_tools(mcp, _tool_context))
 globals().update(_tool_exports)
 
 
