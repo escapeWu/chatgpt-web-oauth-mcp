@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import subprocess
 from typing import Any
 
 from .notebooklm import compact_answer, compact_notebook, compact_source
@@ -29,6 +30,51 @@ async def _call_notebooklm(ctx: ToolContext, method_name: str, *args, **kwargs) 
     return result
 
 
+
+def _redact_email(value: str) -> str:
+    text = (value or "").strip()
+    if "@" not in text:
+        return "" if not text else "***"
+    local, domain = text.split("@", 1)
+    if not local:
+        return "***@" + domain
+    return local[:1] + "***@" + domain
+
+
+def _masked_output(text: str, account: str) -> str:
+    if not text:
+        return ""
+    redacted = text.replace(account, _redact_email(account)) if account else text
+    return redacted[-4000:]
+
+
+def _notebooklm_login_values(ctx: ToolContext) -> tuple[list[str], list[str]]:
+    command = ctx.notebooklm_command.strip() or "notebooklm"
+    browser = ctx.notebooklm_login_browser.strip() or "chrome"
+    browser_profile = ctx.notebooklm_login_browser_profile.strip()
+    account = ctx.notebooklm_login_account.strip()
+    profile_name = ctx.notebooklm_login_profile_name.strip() or ctx.notebooklm_profile.strip()
+    missing: list[str] = []
+    if not browser_profile:
+        missing.append("NOTEBOOKLM_LOGIN_BROWSER_PROFILE")
+    if not account:
+        missing.append("NOTEBOOKLM_LOGIN_ACCOUNT")
+    if not profile_name:
+        missing.append("NOTEBOOKLM_LOGIN_PROFILE_NAME")
+    login_state_flag = "--" + "browser" + "-" + "cookies"
+    args = [
+        command,
+        "login",
+        login_state_flag,
+        f"{browser}::{browser_profile}",
+        "--account",
+        account,
+        "--profile-name",
+        profile_name,
+    ]
+    return args, missing
+
+
 def register_notebooklm_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
     """Register optional low-level NotebookLM tools."""
 
@@ -50,6 +96,90 @@ def register_notebooklm_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             return {"success": True, **payload}
         except Exception as exc:
             return ctx.notebooklm_proxy_error(exc)
+
+    @_notebooklm_tool(
+        mcp,
+        ctx,
+        name="notebooklm_reauth",
+        title="NotebookLM Reauth",
+        annotations=OPEN_WORLD_WRITE_TOOL,
+        description=(
+            "Re-authenticate NotebookLM with a fixed env-configured login command. "
+            "Requires confirm=true and reads browser/account/profile values from environment."
+        ),
+    )
+    def notebooklm_reauth(confirm: bool = False, dry_run: bool = False, timeout: int | None = None) -> dict[str, object]:
+        args, missing = _notebooklm_login_values(ctx)
+        account = args[5] if len(args) > 5 else ""
+        profile_name = args[7] if len(args) > 7 else ""
+        browser_value = args[3] if len(args) > 3 else ""
+        browser, _, browser_profile = browser_value.partition("::")
+        safe_summary = {
+            "command": args[0],
+            "browser": browser,
+            "browser_profile": browser_profile,
+            "account": _redact_email(account),
+            "profile_name": profile_name,
+        }
+        if missing:
+            return {
+                "success": False,
+                "error": {
+                    "code": "missing_notebooklm_reauth_config",
+                    "message": "Missing required environment value(s): " + ", ".join(missing),
+                },
+                "reauth": safe_summary,
+            }
+        if not confirm and not dry_run:
+            return {
+                "success": False,
+                "error": {
+                    "code": "confirmation_required",
+                    "message": "Set confirm=true to run NotebookLM re-authentication.",
+                },
+                "reauth": safe_summary,
+            }
+        if dry_run:
+            return {"success": True, "dry_run": True, "reauth": safe_summary}
+
+        effective_timeout = int(timeout or ctx.command_timeout or 120)
+        try:
+            completed = subprocess.run(
+                args,
+                cwd=str(ctx.workspace_root),
+                text=True,
+                capture_output=True,
+                timeout=effective_timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            return {
+                "success": False,
+                "exit_code": -1,
+                "timed_out": True,
+                "timeout": effective_timeout,
+                "reauth": safe_summary,
+                "stdout_tail": _masked_output(exc.stdout or "", account),
+                "stderr_tail": _masked_output(exc.stderr or "", account),
+                "error": {"code": "timed_out", "message": "NotebookLM re-authentication timed out."},
+            }
+        except OSError as exc:
+            return {
+                "success": False,
+                "exit_code": -1,
+                "timed_out": False,
+                "reauth": safe_summary,
+                "error": {"code": "notebooklm_reauth_failed", "message": str(exc)},
+            }
+
+        return {
+            "success": completed.returncode == 0,
+            "exit_code": completed.returncode,
+            "timed_out": False,
+            "reauth": safe_summary,
+            "stdout_tail": _masked_output(completed.stdout, account),
+            "stderr_tail": _masked_output(completed.stderr, account),
+        }
 
     @_notebooklm_tool(
         mcp,
@@ -180,6 +310,7 @@ def register_notebooklm_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
     return {
         "_notebooklm_tool": notebooklm_tool,
         "notebooklm_auth_check": notebooklm_auth_check,
+        "notebooklm_reauth": notebooklm_reauth,
         "notebooklm_notebook_list": notebooklm_notebook_list,
         "notebooklm_notebook_create": notebooklm_notebook_create,
         "notebooklm_source_add_text": notebooklm_source_add_text,

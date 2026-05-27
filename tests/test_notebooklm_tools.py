@@ -66,6 +66,7 @@ def test_notebooklm_tools_register_with_annotations_when_enabled(monkeypatch) ->
     assert result["notebooklm"]["enabled"] is True
     for name in [
         "notebooklm_auth_check",
+        "notebooklm_reauth",
         "notebooklm_notebook_list",
         "notebooklm_notebook_create",
         "notebooklm_source_add_text",
@@ -77,6 +78,7 @@ def test_notebooklm_tools_register_with_annotations_when_enabled(monkeypatch) ->
 
     registered = asyncio.run(_tool_map(server))
     assert _annotations(registered["notebooklm_auth_check"])["readOnlyHint"] is True
+    assert _annotations(registered["notebooklm_reauth"])["openWorldHint"] is True
     assert _annotations(registered["notebooklm_notebook_list"])["readOnlyHint"] is True
     assert _annotations(registered["notebooklm_source_list"])["readOnlyHint"] is True
     assert _annotations(registered["notebooklm_notebook_create"])["openWorldHint"] is True
@@ -91,6 +93,27 @@ def test_notebooklm_tools_register_with_annotations_when_enabled(monkeypatch) ->
     assert "notebook_id" not in registered["notebooklm_source_list"].parameters.get("required", [])
     assert "notebook_id" not in registered["notebooklm_ask"].parameters["required"]
     assert registered["notebooklm_ask"].parameters["required"] == ["question"]
+
+
+def test_notebooklm_reauth_requires_confirmation_and_redacts_env(monkeypatch) -> None:
+    monkeypatch.setenv("NOTEBOOKLM_LOGIN_BROWSER_PROFILE", "Profile 2")
+    monkeypatch.setenv("NOTEBOOKLM_LOGIN_ACCOUNT", "person@example.test")
+    monkeypatch.setenv("NOTEBOOKLM_LOGIN_PROFILE_NAME", "example-profile")
+    server = _load_server_with_notebooklm_enabled(monkeypatch)
+
+    denied = _call(server.notebooklm_reauth)
+    assert denied["success"] is False
+    assert denied["error"]["code"] == "confirmation_required"
+    assert denied["reauth"] == {
+        "command": "notebooklm",
+        "browser": "chrome",
+        "browser_profile": "Profile 2",
+        "account": "p***@example.test",
+        "profile_name": "example-profile",
+    }
+
+    dry_run = _call(server.notebooklm_reauth, dry_run=True)
+    assert dry_run == {"success": True, "dry_run": True, "reauth": denied["reauth"]}
 
 
 def test_server_wires_taskboard_telegram_notifier_when_configured(monkeypatch) -> None:

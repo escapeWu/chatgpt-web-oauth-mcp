@@ -112,6 +112,26 @@ class ToolContext:
         return str(self._get("NOTEBOOKLM_PROFILE", "") or "")
 
     @property
+    def notebooklm_command(self) -> str:
+        return str(self._get("NOTEBOOKLM_COMMAND", "notebooklm") or "notebooklm")
+
+    @property
+    def notebooklm_login_browser(self) -> str:
+        return str(self._get("NOTEBOOKLM_LOGIN_BROWSER", "chrome") or "chrome")
+
+    @property
+    def notebooklm_login_browser_profile(self) -> str:
+        return str(self._get("NOTEBOOKLM_LOGIN_BROWSER_PROFILE", "") or "")
+
+    @property
+    def notebooklm_login_account(self) -> str:
+        return str(self._get("NOTEBOOKLM_LOGIN_ACCOUNT", "") or "")
+
+    @property
+    def notebooklm_login_profile_name(self) -> str:
+        return str(self._get("NOTEBOOKLM_LOGIN_PROFILE_NAME", "") or "")
+
+    @property
     def notebooklm_default_notebook_id(self) -> str:
         return str(self._get("NOTEBOOKLM_DEFAULT_NOTEBOOK_ID", "") or "")
 
