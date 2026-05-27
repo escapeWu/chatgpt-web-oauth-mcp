@@ -66,6 +66,9 @@ DEBUG_MCP_LOGGING = _env_flag("CHATGPT_MCP_DEBUG_MCP_LOGGING", default=False)
 GRACEFUL_SHUTDOWN_SECONDS = int(
     os.environ.get("CHATGPT_MCP_GRACEFUL_SHUTDOWN_SECONDS", "30")
 )
+TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN", "").strip()
+TG_RECEIVER_ID = os.environ.get("TG_RECEIVER_ID", "").strip()
+TG_NOTIFY_TIMEOUT_SECONDS = float(os.environ.get("TG_NOTIFY_TIMEOUT_SECONDS", "5"))
 
 ENABLE_OBSIDIAN = _env_flag("CHATGPT_MCP_ENABLE_OBSIDIAN", default=False)
 OBSIDIAN_API_KEY = os.environ.get("OBSIDIAN_API_KEY", "").strip()

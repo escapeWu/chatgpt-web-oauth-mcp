@@ -37,6 +37,9 @@ from .config import (
     PORT,
     PUBLIC_BASE_URL,
     STATE_DIR,
+    TG_BOT_TOKEN,
+    TG_NOTIFY_TIMEOUT_SECONDS,
+    TG_RECEIVER_ID,
     WORKSPACE_ROOT,
     ensure_runtime_directories,
 )
@@ -48,6 +51,7 @@ from .notebooklm import (
     create_client as create_notebooklm_client,
     proxy_error as notebooklm_proxy_error,
 )
+from .notifiers import build_telegram_notifier
 from .oauth import OAuthRuntimeConfig
 from .obsidian import (
     ObsidianMCPConfig,
@@ -72,7 +76,14 @@ from .tools_taskboard import register_taskboard_tools
 # protocol-layer middleware was redundant and has been removed.
 
 store = TaskStore(STATE_DIR)
-taskboard_store = TaskBoardStore(STATE_DIR)
+taskboard_store = TaskBoardStore(
+    STATE_DIR,
+    notifier=build_telegram_notifier(
+        bot_token=TG_BOT_TOKEN,
+        receiver_id=TG_RECEIVER_ID,
+        timeout_seconds=TG_NOTIFY_TIMEOUT_SECONDS,
+    ),
+)
 registry = ExecutorRegistry(
     store=store,
     codex_command=CODEX_COMMAND,

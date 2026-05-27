@@ -23,7 +23,12 @@ _NOTEBOOKLM_E2E_ENV = {
     "NOTEBOOKLM_NOTEBOOK",
 }
 for key in list(os.environ):
-    if key.startswith("CHATGPT_MCP_") or key.startswith("OBSIDIAN_") or key.startswith("NOTEBOOKLM_"):
+    if (
+        key.startswith("CHATGPT_MCP_")
+        or key.startswith("OBSIDIAN_")
+        or key.startswith("NOTEBOOKLM_")
+        or key.startswith("TG_")
+    ):
         if _NOTEBOOKLM_E2E_ENABLED and key in _NOTEBOOKLM_E2E_ENV:
             continue
         os.environ.pop(key, None)

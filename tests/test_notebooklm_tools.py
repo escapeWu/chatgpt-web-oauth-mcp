@@ -84,6 +84,25 @@ def test_notebooklm_tools_register_with_annotations_when_enabled(monkeypatch) ->
     assert _annotations(registered["notebooklm_source_delete"])["openWorldHint"] is True
     assert _annotations(registered["notebooklm_ask"])["openWorldHint"] is True
 
+    assert "notebook_id" not in registered["notebooklm_source_add_text"].parameters["required"]
+    assert registered["notebooklm_source_add_text"].parameters["required"] == ["title", "text"]
+    assert "notebook_id" not in registered["notebooklm_source_delete"].parameters["required"]
+    assert registered["notebooklm_source_delete"].parameters["required"] == ["source_id"]
+    assert "notebook_id" not in registered["notebooklm_source_list"].parameters.get("required", [])
+    assert "notebook_id" not in registered["notebooklm_ask"].parameters["required"]
+    assert registered["notebooklm_ask"].parameters["required"] == ["question"]
+
+
+def test_server_wires_taskboard_telegram_notifier_when_configured(monkeypatch) -> None:
+    monkeypatch.setenv("TG_BOT_TOKEN", "bot-token")
+    monkeypatch.setenv("TG_RECEIVER_ID", "5955543529")
+    monkeypatch.setenv("TG_NOTIFY_TIMEOUT_SECONDS", "7")
+    _drop_server_modules()
+    import chatgpt_web_oauth_mcp.server as server
+
+    assert server.taskboard_store.notifier is not None
+    assert server.taskboard_store.notifier.__class__.__name__ == "TelegramTaskBoardNotifier"
+
 
 def test_notebooklm_tools_call_client_wrapper(monkeypatch) -> None:
     server = _load_server_with_notebooklm_enabled(monkeypatch)
@@ -155,11 +174,11 @@ def test_notebooklm_tools_call_client_wrapper(monkeypatch) -> None:
         {"id": "nb1", "title": "Research", "created_at": "2026-05-24", "sources_count": 1}
     ]
     assert _call(server.notebooklm_notebook_create, "New notebook")["notebook"]["id"] == "nb2"
-    assert _call(server.notebooklm_source_add_text, "nb1", "Brief", "body", True, 10)["source"]["id"] == "src1"
-    assert _call(server.notebooklm_source_delete, "nb1", "src1", confirm=False)["success"] is False
-    assert _call(server.notebooklm_source_delete, "nb1", "src1", confirm=True)["deleted"] is True
+    assert _call(server.notebooklm_source_add_text, "Brief", "body", "nb1", True, 10)["source"]["id"] == "src1"
+    assert _call(server.notebooklm_source_delete, "src1", "nb1", confirm=False)["success"] is False
+    assert _call(server.notebooklm_source_delete, "src1", "nb1", confirm=True)["deleted"] is True
     assert _call(server.notebooklm_source_list, "nb1")["sources"] == [{"id": "src1", "title": "Brief", "status": "ready"}]
-    assert _call(server.notebooklm_ask, "nb1", "What matters?", ["src1"], "conv0")["answer"]["answer"] == "Use the cited source."
+    assert _call(server.notebooklm_ask, "What matters?", "nb1", ["src1"], "conv0")["answer"]["answer"] == "Use the cited source."
 
     assert ("delete_source", ("nb1", "src1"), {}) in fake.calls
     assert ("ask", ("nb1", "What matters?"), {"source_ids": ["src1"], "conversation_id": "conv0"}) in fake.calls

@@ -210,19 +210,19 @@ def test_notebooklm_low_level_tools_use_mocked_client_and_compact_payloads(
     created = _call(server.notebooklm_notebook_create, "New notebook")
     assert created["notebook"] == {"id": "nb-2", "title": "New notebook", "sources_count": 0}
 
-    source = _call(server.notebooklm_source_add_text, "nb-1", "Brief", "body", True, 12.5)
+    source = _call(server.notebooklm_source_add_text, "Brief", "body", "nb-1", True, 12.5)
     assert source["source"] == {"id": "src-1", "title": "Brief", "status": "ready"}
 
-    denied_delete = _call(server.notebooklm_source_delete, "nb-1", "src-1")
+    denied_delete = _call(server.notebooklm_source_delete, "src-1")
     assert denied_delete["error"]["code"] == "confirmation_required"
 
-    confirmed_delete = _call(server.notebooklm_source_delete, "nb-1", "src-1", confirm=True)
+    confirmed_delete = _call(server.notebooklm_source_delete, "src-1", "nb-1", confirm=True)
     assert confirmed_delete == {"success": True, "deleted": True, "notebook_id": "nb-1", "source_id": "src-1"}
 
     sources = _call(server.notebooklm_source_list, "nb-1")
     assert sources["sources"] == [{"id": "src-1", "title": "Brief", "status": "ready"}]
 
-    answer = _call(server.notebooklm_ask, "nb-1", "What matters?", ["src-1"], "conv-0")
+    answer = _call(server.notebooklm_ask, "What matters?", "nb-1", ["src-1"], "conv-0")
     assert answer["answer"] == {"answer": "Use the cited source.", "conversation_id": "conv-1", "turn_number": 4}
 
     assert ("add_text_source", ("nb-1", "Brief", "body"), {"wait": True, "wait_timeout": 12.5}) in fake.calls

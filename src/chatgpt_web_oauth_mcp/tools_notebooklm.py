@@ -91,9 +91,9 @@ def register_notebooklm_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         description="Add a text source to a NotebookLM notebook.",
     )
     async def notebooklm_source_add_text(
-        notebook_id: str,
         title: str,
         text: str,
+        notebook_id: str | None = None,
         wait: bool = False,
         wait_timeout: float | None = None,
     ) -> dict[str, object]:
@@ -119,7 +119,7 @@ def register_notebooklm_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         annotations=OPEN_WORLD_WRITE_TOOL,
         description="Delete a source from a NotebookLM notebook. Requires confirm=true at this bridge layer.",
     )
-    async def notebooklm_source_delete(notebook_id: str, source_id: str, confirm: bool = False) -> dict[str, object]:
+    async def notebooklm_source_delete(source_id: str, notebook_id: str | None = None, confirm: bool = False) -> dict[str, object]:
         if not confirm:
             return {
                 "success": False,
@@ -142,7 +142,7 @@ def register_notebooklm_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         annotations=READ_ONLY_TOOL,
         description="List sources in a NotebookLM notebook when supported by the configured client wrapper.",
     )
-    async def notebooklm_source_list(notebook_id: str) -> dict[str, object]:
+    async def notebooklm_source_list(notebook_id: str | None = None) -> dict[str, object]:
         try:
             sources = await _call_notebooklm(ctx, "list_sources", notebook_id)
             compact = [compact_source(source) for source in sources or []]
@@ -159,8 +159,8 @@ def register_notebooklm_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         description="Ask a NotebookLM notebook a question.",
     )
     async def notebooklm_ask(
-        notebook_id: str,
         question: str,
+        notebook_id: str | None = None,
         source_ids: list[str] | None = None,
         conversation_id: str | None = None,
     ) -> dict[str, object]:
