@@ -372,6 +372,39 @@ def test_http_app_oauth_challenge_advertises_resource_metadata(monkeypatch, tmp_
     assert 'scope="local-ops"' in challenge
 
 
+def test_oauth_authorize_page_persists_token_and_auto_submits(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(server, "AUTH_MODE", "oauth")
+    monkeypatch.setattr(server, "AUTH_TOKEN", "secret-token")
+    monkeypatch.setattr(server, "PUBLIC_BASE_URL", "https://mcp.example.test")
+    monkeypatch.setattr(server, "STATE_DIR", tmp_path)
+    app = build_http_app()
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/oauth/authorize",
+            params={
+                "client_id": "mcp_client_test",
+                "redirect_uri": "https://chat.openai.com/aip/callback",
+                "response_type": "code",
+                "state": "state-123",
+                "scope": "local-ops",
+                "resource": "https://mcp.example.test/mcp",
+                "code_challenge": "challenge-123",
+                "code_challenge_method": "S256",
+            },
+        )
+
+    assert response.status_code == 200
+    html = response.text
+    assert 'id="oauth-authorize-form"' in html
+    assert 'id="oauth-login-token"' in html
+    assert "chatgpt-web-oauth-mcp.oauth.login_token" in html
+    assert "window.localStorage.getItem(storageKey)" in html
+    assert "window.localStorage.setItem(storageKey, token)" in html
+    assert "hasCompleteOAuthRequest()" in html
+    assert "form.requestSubmit()" in html
+
+
 def test_http_app_oauth_dcr_pkce_flow_allows_mcp_access(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(server, "AUTH_MODE", "oauth")
     monkeypatch.setattr(server, "AUTH_TOKEN", "secret-token")

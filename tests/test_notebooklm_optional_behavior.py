@@ -90,6 +90,7 @@ def test_notebooklm_enabled_registers_without_obsidian_tools(monkeypatch: pytest
 
     assert result["notebooklm"]["enabled"] is True
     assert "notebooklm_auth_check" in result["tools"]
+    assert "notebooklm_reauth" in result["tools"]
     assert "notebooklm_notebook_list" in result["tools"]
     assert "notebooklm_notebook_create" in result["tools"]
     assert "notebooklm_source_add_text" in result["tools"]
