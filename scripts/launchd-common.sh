@@ -139,7 +139,6 @@ prepare_launchd_env() {
   local override_cloudflared_config="${CHATGPT_MCP_CLOUDFLARED_CONFIG:-}"
   local override_tunnel_name="${CHATGPT_MCP_TUNNEL_NAME:-}"
   local override_codex_command="${CHATGPT_MCP_CODEX_COMMAND:-}"
-  local override_claude_command="${CHATGPT_MCP_CLAUDE_COMMAND:-}"
   local override_command_timeout="${CHATGPT_MCP_COMMAND_TIMEOUT:-}"
   local override_delegate_timeout="${CHATGPT_MCP_DELEGATE_TIMEOUT:-}"
   local override_debug_mcp_logging="${CHATGPT_MCP_DEBUG_MCP_LOGGING:-}"
@@ -151,12 +150,6 @@ prepare_launchd_env() {
   local override_label_prefix="${CHATGPT_MCP_LAUNCHD_LABEL_PREFIX:-}"
   local override_external_cloudflared="${CHATGPT_MCP_EXTERNAL_CLOUDFLARED:-}"
   local override_enable_obsidian="${CHATGPT_MCP_ENABLE_OBSIDIAN:-}"
-  local override_enable_notebooklm="${CHATGPT_MCP_ENABLE_NOTEBOOKLM:-}"
-  local override_notebooklm_storage_path="${NOTEBOOKLM_STORAGE_PATH:-}"
-  local override_notebooklm_profile="${NOTEBOOKLM_PROFILE:-}"
-  local override_notebooklm_default_notebook_id="${CHATGPT_MCP_NOTEBOOKLM_DEFAULT_NOTEBOOK_ID:-}"
-  local override_notebooklm_notebook="${NOTEBOOKLM_NOTEBOOK:-}"
-  local override_notebooklm_timeout_seconds="${NOTEBOOKLM_TIMEOUT_SECONDS:-}"
   local override_launchd_dir="${CHATGPT_MCP_LAUNCHD_DIR:-}"
   local override_launchd_log_dir="${CHATGPT_MCP_LAUNCHD_LOG_DIR:-}"
   local override_launchd_path="${CHATGPT_MCP_LAUNCHD_PATH:-}"
@@ -167,9 +160,6 @@ prepare_launchd_env() {
   local override_obsidian_mcp_url="${OBSIDIAN_MCP_URL:-}"
   local override_obsidian_verify_ssl="${OBSIDIAN_VERIFY_SSL:-}"
   local override_obsidian_timeout_seconds="${OBSIDIAN_TIMEOUT_SECONDS:-}"
-  local override_tg_bot_token="${TG_BOT_TOKEN:-}"
-  local override_tg_receiver_id="${TG_RECEIVER_ID:-}"
-  local override_tg_notify_timeout_seconds="${TG_NOTIFY_TIMEOUT_SECONDS:-}"
 
   load_env_file
 
@@ -180,7 +170,6 @@ prepare_launchd_env() {
   export CHATGPT_MCP_CLOUDFLARED_CONFIG="${override_cloudflared_config:-${CHATGPT_MCP_CLOUDFLARED_CONFIG:-}}"
   export CHATGPT_MCP_TUNNEL_NAME="${override_tunnel_name:-${CHATGPT_MCP_TUNNEL_NAME:-}}"
   export CHATGPT_MCP_CODEX_COMMAND="${override_codex_command:-${CHATGPT_MCP_CODEX_COMMAND:-codex}}"
-  export CHATGPT_MCP_CLAUDE_COMMAND="${override_claude_command:-${CHATGPT_MCP_CLAUDE_COMMAND:-claude}}"
   export CHATGPT_MCP_COMMAND_TIMEOUT="${override_command_timeout:-${CHATGPT_MCP_COMMAND_TIMEOUT:-120}}"
   export CHATGPT_MCP_DELEGATE_TIMEOUT="${override_delegate_timeout:-${CHATGPT_MCP_DELEGATE_TIMEOUT:-1800}}"
   export CHATGPT_MCP_DEBUG_MCP_LOGGING="${override_debug_mcp_logging:-${CHATGPT_MCP_DEBUG_MCP_LOGGING:-0}}"
@@ -195,20 +184,12 @@ prepare_launchd_env() {
   export CHATGPT_MCP_LAUNCHD_PATH="${override_launchd_path:-${CHATGPT_MCP_LAUNCHD_PATH:-${CURRENT_SHELL_PATH}}}"
   export CHATGPT_MCP_EXTERNAL_CLOUDFLARED="${override_external_cloudflared:-${CHATGPT_MCP_EXTERNAL_CLOUDFLARED:-0}}"
   export CHATGPT_MCP_ENABLE_OBSIDIAN="${override_enable_obsidian:-${CHATGPT_MCP_ENABLE_OBSIDIAN:-0}}"
-  export CHATGPT_MCP_ENABLE_NOTEBOOKLM="${override_enable_notebooklm:-${CHATGPT_MCP_ENABLE_NOTEBOOKLM:-0}}"
-  export NOTEBOOKLM_STORAGE_PATH="${override_notebooklm_storage_path:-${NOTEBOOKLM_STORAGE_PATH:-}}"
-  export NOTEBOOKLM_PROFILE="${override_notebooklm_profile:-${NOTEBOOKLM_PROFILE:-}}"
-  export CHATGPT_MCP_NOTEBOOKLM_DEFAULT_NOTEBOOK_ID="${override_notebooklm_default_notebook_id:-${CHATGPT_MCP_NOTEBOOKLM_DEFAULT_NOTEBOOK_ID:-}}"
-  export NOTEBOOKLM_NOTEBOOK="${override_notebooklm_notebook:-${NOTEBOOKLM_NOTEBOOK:-}}"
-  export NOTEBOOKLM_TIMEOUT_SECONDS="${override_notebooklm_timeout_seconds:-${NOTEBOOKLM_TIMEOUT_SECONDS:-30}}"
   export OBSIDIAN_HOST="${override_obsidian_host:-${OBSIDIAN_HOST:-127.0.0.1}}"
   export OBSIDIAN_PORT="${override_obsidian_port:-${OBSIDIAN_PORT:-27124}}"
   export OBSIDIAN_PROTOCOL="${override_obsidian_protocol:-${OBSIDIAN_PROTOCOL:-https}}"
   export OBSIDIAN_MCP_URL="${override_obsidian_mcp_url:-${OBSIDIAN_MCP_URL:-}}"
   export OBSIDIAN_VERIFY_SSL="${override_obsidian_verify_ssl:-${OBSIDIAN_VERIFY_SSL:-0}}"
   export OBSIDIAN_TIMEOUT_SECONDS="${override_obsidian_timeout_seconds:-${OBSIDIAN_TIMEOUT_SECONDS:-10}}"
-  export TG_RECEIVER_ID="${override_tg_receiver_id:-${TG_RECEIVER_ID:-}}"
-  export TG_NOTIFY_TIMEOUT_SECONDS="${override_tg_notify_timeout_seconds:-${TG_NOTIFY_TIMEOUT_SECONDS:-5}}"
 
   if [[ -n "${override_auth_token}" ]]; then
     export CHATGPT_MCP_AUTH_TOKEN="${override_auth_token}"
@@ -217,11 +198,6 @@ prepare_launchd_env() {
     export OBSIDIAN_API_KEY="${override_obsidian_api_key}"
   elif [[ -n "${OBSIDIAN_API_KEY:-}" ]]; then
     export OBSIDIAN_API_KEY
-  fi
-  if [[ -n "${override_tg_bot_token}" ]]; then
-    export TG_BOT_TOKEN="${override_tg_bot_token}"
-  elif [[ -n "${TG_BOT_TOKEN:-}" ]]; then
-    export TG_BOT_TOKEN
   fi
 }
 

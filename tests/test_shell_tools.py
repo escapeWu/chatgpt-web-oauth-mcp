@@ -1,6 +1,17 @@
+import shlex
+import sys
 from pathlib import Path
 
-from chatgpt_web_oauth_mcp.shell import TIMEOUT_EXIT_CODE, run_command
+from chatgpt_web_oauth_mcp.shell import (
+    MAX_COMMAND_BATCH_CONCURRENCY,
+    TIMEOUT_EXIT_CODE,
+    run_command,
+    run_commands,
+)
+
+
+def _python_cmd(code: str) -> str:
+    return f"{shlex.quote(sys.executable)} -c {shlex.quote(code)}"
 
 
 def test_run_command_returns_stdout_and_exit_code(tmp_path: Path) -> None:
@@ -31,7 +42,7 @@ def test_run_command_timeout_returns_unified_shape(tmp_path: Path) -> None:
     assert result["timeout"] == 1
     assert result["error"]["code"] == "timed_out"
     assert "timeout" in result["error"]["message"].lower()
-    assert result["hint"] == "consider_delegate_task"
+    assert result["hint"] == "increase_timeout_or_delegate"
 
 
 def test_run_command_cwd_errors_include_exit_code_field(tmp_path: Path) -> None:
@@ -45,3 +56,78 @@ def test_run_command_cwd_errors_include_exit_code_field(tmp_path: Path) -> None:
     assert result["stdout"] == ""
     assert result["stderr"] == ""
     assert result["error"]["code"] == "cwd_not_found"
+
+
+def test_run_commands_sequential_returns_ordered_batch_results(tmp_path: Path) -> None:
+    result = run_commands(
+        commands=[
+            _python_cmd("print('first')"),
+            _python_cmd("import sys; print('second'); sys.exit(7)"),
+        ],
+        cwd=tmp_path,
+        timeout=5,
+        mode="sequential",
+    )
+
+    assert result["success"] is False
+    assert result["mode"] == "batch"
+    assert result["execution_mode"] == "sequential"
+    assert result["max_concurrency"] == 1
+    assert result["command_count"] == 2
+    assert result["completed_count"] == 2
+    assert result["failed_count"] == 1
+    assert [item["index"] for item in result["results"]] == [0, 1]
+    assert result["results"][0]["stdout"].strip() == "first"
+    assert result["results"][1]["stdout"].strip() == "second"
+    assert result["results"][1]["exit_code"] == 7
+
+
+def test_run_commands_parallel_preserves_input_order(tmp_path: Path) -> None:
+    result = run_commands(
+        commands=[
+            _python_cmd("print('alpha')"),
+            _python_cmd("print('beta')"),
+            _python_cmd("print('gamma')"),
+        ],
+        cwd=tmp_path,
+        timeout=5,
+        mode="parallel",
+        max_concurrency=2,
+    )
+
+    assert result["success"] is True
+    assert result["execution_mode"] == "parallel"
+    assert result["max_concurrency"] == 2
+    assert [item["index"] for item in result["results"]] == [0, 1, 2]
+    assert [item["stdout"].strip() for item in result["results"]] == [
+        "alpha",
+        "beta",
+        "gamma",
+    ]
+
+
+def test_run_commands_rejects_concurrency_above_hard_limit(tmp_path: Path) -> None:
+    result = run_commands(
+        commands=["echo hi"],
+        cwd=tmp_path,
+        timeout=5,
+        mode="parallel",
+        max_concurrency=MAX_COMMAND_BATCH_CONCURRENCY + 1,
+    )
+
+    assert result["success"] is False
+    assert result["error"]["code"] == "invalid_arguments"
+    assert str(MAX_COMMAND_BATCH_CONCURRENCY) in result["error"]["message"]
+
+
+def test_run_commands_rejects_empty_command_items(tmp_path: Path) -> None:
+    result = run_commands(
+        commands=["echo ok", "   "],
+        cwd=tmp_path,
+        timeout=5,
+        mode="sequential",
+    )
+
+    assert result["success"] is False
+    assert result["error"]["code"] == "invalid_arguments"
+    assert "non-empty" in result["error"]["message"]

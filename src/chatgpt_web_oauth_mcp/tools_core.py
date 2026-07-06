@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import Field
 
 from . import session
 from .pathing import resolve_path
@@ -8,35 +10,7 @@ from .tool_context import LOCAL_STATE_TOOL, READ_ONLY_TOOL, ToolContext
 
 
 def register_core_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
-    """Register server metadata, cwd, and skill-discovery tools."""
-
-    @mcp.tool(
-        name="list_skills",
-        title="List Skills",
-        annotations=READ_ONLY_TOOL,
-        description=(
-            "List project and global agent skills as lightweight summaries. "
-            "Returns skill name, description, preferred path, and source locations. "
-            "Use namespace ('agents' | 'codex' | 'claude') to scope, name_pattern "
-            "(fnmatch, e.g. 'git-*') to filter by skill name, and "
-            "description_max_length to cap long descriptions for index-style scans."
-        ),
-    )
-    def list_skills(
-        include_project: bool = True,
-        include_global: bool = True,
-        namespace: str | None = None,
-        name_pattern: str | None = None,
-        description_max_length: int | None = None,
-    ) -> dict[str, object]:
-        return ctx.list_skills_impl(
-            workspace_root=ctx.workspace_root,
-            include_project=include_project,
-            include_global=include_global,
-            namespace=namespace,
-            name_pattern=name_pattern,
-            description_max_length=description_max_length,
-        )
+    """Register server metadata and cwd tools."""
 
     @mcp.tool(
         name="server_info",
@@ -57,7 +31,6 @@ def register_core_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             registered = await list_tools(None)
         tools = sorted(tool.name for tool in registered)
         session_cwd = session.get_default_cwd()
-        notebooklm_config = ctx.current_notebooklm_config()
         return {
             "success": True,
             "app_name": ctx.app_name,
@@ -71,23 +44,35 @@ def register_core_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             "auth": ctx.current_oauth_config().normalized_auth_mode,
             "debug_mcp_logging": ctx.debug_mcp_logging,
             "codex_command": ctx.codex_command,
-            "claude_command": ctx.claude_command,
+            "routing_contract": {
+                "chatgpt_web_role": "architect_manager_reviewer",
+                "codex_delegate_role": "single_bounded_execution_slice",
+                "default_flow": [
+                    "ChatGPT Web inspects and reasons with direct MCP tools.",
+                    "ChatGPT Web creates a small Codex Execution Prompt when local execution needs a delegate.",
+                    "delegate_task runs exactly one serialized execution slice.",
+                    "ChatGPT Web reviews the result, logs, and local verification evidence before deciding the next step.",
+                ],
+                "delegate_task_should_not": [
+                    "Perform broad opaque planning or research loops.",
+                    "Replace direct MCP inspection, patching, git checks, or short shell verification.",
+                    "Declare work complete without local verification evidence.",
+                ],
+            },
+            "delegate_mode": {
+                "executor": "codex",
+                "serial": True,
+                "background_tasks": False,
+                "default_wait_seconds": 180,
+                "continuation": "call delegate_task again when status is running",
+                "audit_logs": "system temp / chatgpt-web-oauth-mcp / codex-delegates",
+            },
             "obsidian_proxy": {
                 "enabled": ctx.enable_obsidian,
                 "configured": bool(ctx.obsidian_api_key.strip()),
                 "mcp_url": ctx.current_obsidian_config().mcp_url,
                 "mode": "native_mcp_proxy",
                 "tool_prefix": "obsidian_",
-            },
-            "notebooklm": {
-                "enabled": ctx.enable_notebooklm,
-                "configured": bool(notebooklm_config.configured),
-                "mode": "notebooklm_py_wrapper",
-                "storage_path": notebooklm_config.storage_path or None,
-                "profile": notebooklm_config.profile or None,
-                "default_notebook_id": notebooklm_config.default_notebook_id or None,
-                "timeout_seconds": notebooklm_config.timeout_seconds,
-                "tool_prefix": "notebooklm_",
             },
             "tools": tools,
             "tool_count": len(tools),
@@ -104,7 +89,17 @@ def register_core_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             "repo: set it once instead of passing `cwd` on every call."
         ),
     )
-    def set_default_cwd(path: str | None = None) -> dict[str, object]:
+    def set_default_cwd(
+        path: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Directory to use as the session default cwd. Pass null or omit to clear "
+                    "the override and use the server workspace_root."
+                )
+            ),
+        ] = None
+    ) -> dict[str, object]:
         if not path:
             session.set_default_cwd(None)
             return {
@@ -161,7 +156,6 @@ def register_core_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         }
 
     return {
-        "list_skills": list_skills,
         "server_info": server_info,
         "set_default_cwd": set_default_cwd,
         "get_default_cwd": get_default_cwd,

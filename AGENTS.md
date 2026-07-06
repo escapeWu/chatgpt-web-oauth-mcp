@@ -11,9 +11,14 @@ ChatGPT Web ──OAuth + HTTPS──▶ FastMCP Server (uvicorn)
                                   │
                   ┌───────────────┼───────────────┐
                   ▼               ▼               ▼
-            Direct Tools     Shell Tool     Delegate Tasks
-           (files/search)   (run_command)  (codex/claude-code)
+            Direct Tools     Shell Tool     Codex Delegate
+           (inspect/edit)   (short local)  (one bounded execution slice)
 ```
+
+ChatGPT Web is the architect/manager/reviewer. It should inspect, plan, and
+review through direct MCP tools first. `delegate_task` is only a single-task
+Codex executor for a bounded Codex Execution Prompt, not a broad opaque planning
+or research loop.
 
 ## Source layout
 
@@ -21,10 +26,9 @@ ChatGPT Web ──OAuth + HTTPS──▶ FastMCP Server (uvicorn)
 src/chatgpt_web_oauth_mcp/
 ├── server.py      # FastMCP composition, HTTP app integration, uvicorn entrypoint / fd-aware child
 ├── tool_context.py # Shared runtime lookup context and MCP tool annotations
-├── tools_core.py  # server_info, cwd tools, skill discovery registration
+├── tools_core.py  # server_info and cwd tools
 ├── tools_files.py # list_files, search, read_text, write_file, apply_patch registration
-├── tools_git_shell.py # git_*, shell, delegate_task, task lifecycle registration
-├── tools_taskboard.py # taskboard_* tool registration
+├── tools_git_shell.py # git_*, synchronous shell, serial Codex delegate registration
 ├── tools_obsidian.py # optional obsidian_* proxy tool registration
 ├── config.py      # Env-var driven settings
 ├── oauth.py       # OAuth dynamic registration, PKCE, token store, metadata
@@ -33,10 +37,7 @@ src/chatgpt_web_oauth_mcp/
 ├── files.py       # list_files, read_text, write_file
 ├── search.py      # glob/regex/text search implementations
 ├── shell.py       # run_command subprocess helper
-├── tasks.py       # Persistent task metadata and logs
-├── taskboard.py   # Persistent lightweight TaskBoard metadata and coordination
-├── worktrees.py   # Git worktree helpers for TaskBoard isolation/result metadata
-├── executors.py   # async delegate_task via codex / claude-code
+├── executors.py   # synchronous serialized delegate_task via Codex
 └── supervisor.py  # rolling-reload supervisor for tunnels / launchd
 ```
 
@@ -47,16 +48,13 @@ src/chatgpt_web_oauth_mcp/
 | `server_info` | Inspect runtime config and available MCP tools |
 | `set_default_cwd` / `get_default_cwd` | Manage session default working directory |
 | `list_files` | List directory contents |
-| `search` | Glob, regex, or literal text search |
+| `search` | Glob, regex, literal text search, or batch search with `mode="sequential"` / `mode="parallel"`; parallel batches cap `max_concurrency` at 3 |
 | `read_text` | Single/batch text reader with pagination |
 | `write_file` | Create or overwrite a file, with dry-run support |
 | `apply_patch` | Structured patch editing for existing files |
 | `git_status` / `git_diff` / `git_commit` / `git_log` / `git_show` / `git_blame` | Structured git workflows |
-| `run_command` / `run_command_stream` | Execute shell commands |
-| `delegate_task` | Submit long-running tasks to codex/claude-code |
-| `get_task` / `wait_task` / `cancel_task` | Manage delegated/background tasks |
-| `purge_tasks` | GC old task logs under `STATE_DIR/tasks` |
-| `taskboard_*` tools | Persist original-request context, delegate, wait, collect, cancel, list, and purge lightweight user-decomposed task boards |
+| `run_command` | Execute one shell command, or multiple commands with `mode="sequential"` or `mode="parallel"`; parallel batches cap `max_concurrency` at 3 |
+| `delegate_task` | Run one serialized, bounded Codex execution slice; wait up to 180s, then return either the result or `status=running` |
 | `obsidian_*` tools | Optional Obsidian native MCP proxy tools; only registered when `CHATGPT_MCP_ENABLE_OBSIDIAN=1` |
 
 ## Key concepts
@@ -65,7 +63,7 @@ src/chatgpt_web_oauth_mcp/
 - OAuth mode is enabled with `CHATGPT_MCP_AUTH_MODE=oauth`.
 - `CHATGPT_MCP_PUBLIC_BASE_URL` must be set in OAuth mode so issuer and resource URLs are stable and not Host-header-derived.
 - Prefer separate `CHATGPT_MCP_AUTH_TOKEN` and `CHATGPT_MCP_OAUTH_LOGIN_TOKEN` values.
-- Task state is persisted under `CHATGPT_MCP_STATE_DIR`.
+- `delegate_task` is intentionally Codex-only and single-flight. It should receive one small execution prompt with `task_id`, `files_in_scope`, `out_of_scope`, `acceptance_criteria`, `done_means`, and verification commands when possible. It long-polls the active delegate for up to 180 seconds by default; if Codex is still running, it returns `status=running` and the client should call `delegate_task` again to continue waiting. Each delegate writes private audit logs under the system temporary cache directory (`prompt.txt`, `stdout.log`, `stderr.log`, `metadata.json`) and returns their paths in `logs`. No separate task polling, TaskBoard, Claude delegate, or skill-discovery tools are exposed.
 
 ## Development rules
 

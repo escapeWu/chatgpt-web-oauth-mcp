@@ -40,7 +40,6 @@ def _config(tmp_path: Path) -> LaunchdServiceConfig:
             "CHATGPT_MCP_OAUTH_SCOPES": "local-ops",
             "CHATGPT_MCP_OAUTH_TOKEN_TTL_SECONDS": "86400",
             "CHATGPT_MCP_CODEX_COMMAND": "codex",
-            "CHATGPT_MCP_CLAUDE_COMMAND": "claude",
             "CHATGPT_MCP_COMMAND_TIMEOUT": "120",
             "CHATGPT_MCP_DELEGATE_TIMEOUT": "1800",
             "CHATGPT_MCP_DEBUG_MCP_LOGGING": "1",

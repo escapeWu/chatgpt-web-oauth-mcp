@@ -11,24 +11,13 @@ from .config import (
     APP_NAME,
     AUTH_MODE,
     AUTH_TOKEN,
-    CLAUDE_COMMAND,
     CODEX_COMMAND,
     COMMAND_TIMEOUT,
     DEBUG_MCP_LOGGING,
     DELEGATE_TIMEOUT,
     ENABLE_OBSIDIAN,
-    ENABLE_NOTEBOOKLM,
     GRACEFUL_SHUTDOWN_SECONDS,
     HOST,
-    NOTEBOOKLM_COMMAND,
-    NOTEBOOKLM_DEFAULT_NOTEBOOK_ID,
-    NOTEBOOKLM_LOGIN_ACCOUNT,
-    NOTEBOOKLM_LOGIN_BROWSER,
-    NOTEBOOKLM_LOGIN_BROWSER_PROFILE,
-    NOTEBOOKLM_LOGIN_PROFILE_NAME,
-    NOTEBOOKLM_PROFILE,
-    NOTEBOOKLM_STORAGE_PATH,
-    NOTEBOOKLM_TIMEOUT_SECONDS,
     OAUTH_LOGIN_TOKEN,
     OAUTH_SCOPES,
     OAUTH_TOKEN_TTL_SECONDS,
@@ -42,21 +31,11 @@ from .config import (
     PORT,
     PUBLIC_BASE_URL,
     STATE_DIR,
-    TG_BOT_TOKEN,
-    TG_NOTIFY_TIMEOUT_SECONDS,
-    TG_RECEIVER_ID,
     WORKSPACE_ROOT,
     ensure_runtime_directories,
 )
 from .executors import ExecutorRegistry
 from .http_compat import build_http_compat_app
-from .notebooklm import (
-    NotebookLMConfig,
-    NotebookLMConfigError,
-    create_client as create_notebooklm_client,
-    proxy_error as notebooklm_proxy_error,
-)
-from .notifiers import build_telegram_notifier
 from .oauth import OAuthRuntimeConfig
 from .obsidian import (
     ObsidianMCPConfig,
@@ -64,44 +43,32 @@ from .obsidian import (
     list_native_tools as obsidian_list_native_tools,
     proxy_error as obsidian_proxy_error,
 )
-from .skills import list_skills as list_skills_impl
-from .taskboard import TaskBoardError, TaskBoardStore
-from .tasks import TaskStore
 from .tool_context import ToolContext
 from .tools_core import register_core_tools
 from .tools_files import register_file_tools
 from .tools_git_shell import register_git_shell_tools
-from .tools_notebooklm import register_notebooklm_tools
 from .tools_obsidian import register_obsidian_tools
-from .tools_taskboard import register_taskboard_tools
 
 
 # Bearer auth lives exclusively in the HTTP layer (http_compat.HTTPBearerAuthMiddleware)
 # so unauthenticated clients can't even open an SSE session. The FastMCP
 # protocol-layer middleware was redundant and has been removed.
 
-store = TaskStore(STATE_DIR)
-taskboard_store = TaskBoardStore(
-    STATE_DIR,
-    notifier=build_telegram_notifier(
-        bot_token=TG_BOT_TOKEN,
-        receiver_id=TG_RECEIVER_ID,
-        timeout_seconds=TG_NOTIFY_TIMEOUT_SECONDS,
-    ),
-)
-registry = ExecutorRegistry(
-    store=store,
-    codex_command=CODEX_COMMAND,
-    claude_command=CLAUDE_COMMAND,
-)
+registry = ExecutorRegistry(codex_command=CODEX_COMMAND)
 
 MCP_INSTRUCTIONS = (
-    "Use direct tools first for normal tasks. Prioritize apply_patch/write_file for edits and "
-    "run_command_stream/wait_task for long-running shell work. "
-    "Use search/read_text for focused repo discovery and reading, not as a substitute for every shell step. "
-    "Use git_* only when the current cwd is actually inside a git repository. "
-    "Use delegate_task only when direct tools are insufficient for a complex, long-running, or multi-file task. "
-    "Use taskboard_* for board-level tracking of user-decomposed subtasks; MCP does not decompose tasks automatically."
+    "Architecture: ChatGPT Web is the architect/manager/reviewer; this local MCP server exposes "
+    "scoped local tools; delegate_task is only a single-task Codex executor. Use direct tools first "
+    "for repo inspection, planning, patching, short commands, git checks, and verification. "
+    "Use search/read_text for focused or batched discovery and reading, apply_patch/write_file for edits, "
+    "run_command for short single or batched shell work, and git_* only inside a git repository. "
+    "Use delegate_task only for one bounded Codex Execution Prompt when direct tools are insufficient; "
+    "it runs one serialized Codex delegate and blocks up to 180 seconds by default. If it returns "
+    "status=running, call delegate_task again to continue waiting. Each delegate writes private "
+    "audit logs under the system temporary cache directory and returns their paths in logs. Do not "
+    "use delegate_task as a large opaque planning/research loop; split broad work into small "
+    "verified execution prompts. "
+    "No task polling, taskboard, or skill-discovery tools are exposed."
 )
 
 mcp = FastMCP(
@@ -144,16 +111,6 @@ def _current_obsidian_config() -> ObsidianMCPConfig:
     )
 
 
-def _current_notebooklm_config() -> NotebookLMConfig:
-    return NotebookLMConfig(
-        enabled=bool(globals().get("ENABLE_NOTEBOOKLM", False)),
-        storage_path=globals().get("NOTEBOOKLM_STORAGE_PATH", "") or "",
-        profile=globals().get("NOTEBOOKLM_PROFILE", "") or "",
-        default_notebook_id=globals().get("NOTEBOOKLM_DEFAULT_NOTEBOOK_ID", "") or "",
-        timeout_seconds=int(globals().get("NOTEBOOKLM_TIMEOUT_SECONDS", 30) or 30),
-    )
-
-
 def _global_value(name: str, default: Any = None) -> Any:
     return globals().get(name, default)
 
@@ -162,16 +119,13 @@ _tool_context = ToolContext(
     global_value=_global_value,
     current_oauth_config=_current_oauth_config,
     current_obsidian_config=_current_obsidian_config,
-    current_notebooklm_config=_current_notebooklm_config,
 )
 
 _tool_exports: dict[str, object] = {}
 _tool_exports.update(register_core_tools(mcp, _tool_context))
 _tool_exports.update(register_file_tools(mcp, _tool_context))
 _tool_exports.update(register_git_shell_tools(mcp, _tool_context))
-_tool_exports.update(register_taskboard_tools(mcp, _tool_context))
 _tool_exports.update(register_obsidian_tools(mcp, _tool_context))
-_tool_exports.update(register_notebooklm_tools(mcp, _tool_context))
 globals().update(_tool_exports)
 
 

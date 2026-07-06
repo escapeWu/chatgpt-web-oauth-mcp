@@ -3,7 +3,7 @@
 Semantic note on ``WORKSPACE_ROOT`` / ``DEFAULT_CWD``
 -----------------------------------------------------
 Despite the name "root", this value is **not a sandbox boundary**. The project
-is designed to give an MCP client (ChatGPT Web / Codex / Claude) arbitrary
+is designed to give an MCP client (ChatGPT Web / Codex) arbitrary
 local-shell capability; once a client passes the bearer token it has full shell
 and full-filesystem access.
 
@@ -59,16 +59,12 @@ OAUTH_SCOPES = tuple(
 )
 OAUTH_TOKEN_TTL_SECONDS = int(os.environ.get("CHATGPT_MCP_OAUTH_TOKEN_TTL_SECONDS", "86400"))
 CODEX_COMMAND = os.environ.get("CHATGPT_MCP_CODEX_COMMAND", "codex").strip()
-CLAUDE_COMMAND = os.environ.get("CHATGPT_MCP_CLAUDE_COMMAND", "claude").strip()
 COMMAND_TIMEOUT = int(os.environ.get("CHATGPT_MCP_COMMAND_TIMEOUT", "120"))
 DELEGATE_TIMEOUT = int(os.environ.get("CHATGPT_MCP_DELEGATE_TIMEOUT", "1800"))
 DEBUG_MCP_LOGGING = _env_flag("CHATGPT_MCP_DEBUG_MCP_LOGGING", default=False)
 GRACEFUL_SHUTDOWN_SECONDS = int(
     os.environ.get("CHATGPT_MCP_GRACEFUL_SHUTDOWN_SECONDS", "30")
 )
-TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN", "").strip()
-TG_RECEIVER_ID = os.environ.get("TG_RECEIVER_ID", "").strip()
-TG_NOTIFY_TIMEOUT_SECONDS = float(os.environ.get("TG_NOTIFY_TIMEOUT_SECONDS", "5"))
 
 ENABLE_OBSIDIAN = _env_flag("CHATGPT_MCP_ENABLE_OBSIDIAN", default=False)
 OBSIDIAN_API_KEY = os.environ.get("OBSIDIAN_API_KEY", "").strip()
@@ -78,21 +74,6 @@ OBSIDIAN_PROTOCOL = os.environ.get("OBSIDIAN_PROTOCOL", "https").strip().lower()
 OBSIDIAN_MCP_URL = os.environ.get("OBSIDIAN_MCP_URL", "").strip()
 OBSIDIAN_VERIFY_SSL = _env_flag("OBSIDIAN_VERIFY_SSL", default=False)
 OBSIDIAN_TIMEOUT_SECONDS = int(os.environ.get("OBSIDIAN_TIMEOUT_SECONDS", "10"))
-
-ENABLE_NOTEBOOKLM = _env_flag("CHATGPT_MCP_ENABLE_NOTEBOOKLM", default=False)
-NOTEBOOKLM_STORAGE_PATH = os.environ.get("NOTEBOOKLM_STORAGE_PATH", "").strip()
-NOTEBOOKLM_PROFILE = os.environ.get("NOTEBOOKLM_PROFILE", "").strip()
-NOTEBOOKLM_COMMAND = os.environ.get("NOTEBOOKLM_COMMAND", "notebooklm").strip() or "notebooklm"
-NOTEBOOKLM_LOGIN_BROWSER = os.environ.get("NOTEBOOKLM_LOGIN_BROWSER", "chrome").strip() or "chrome"
-NOTEBOOKLM_LOGIN_BROWSER_PROFILE = os.environ.get("NOTEBOOKLM_LOGIN_BROWSER_PROFILE", "").strip()
-NOTEBOOKLM_LOGIN_ACCOUNT = os.environ.get("NOTEBOOKLM_LOGIN_ACCOUNT", "").strip()
-NOTEBOOKLM_LOGIN_PROFILE_NAME = os.environ.get("NOTEBOOKLM_LOGIN_PROFILE_NAME", NOTEBOOKLM_PROFILE).strip()
-NOTEBOOKLM_DEFAULT_NOTEBOOK_ID = (
-    os.environ.get("CHATGPT_MCP_NOTEBOOKLM_DEFAULT_NOTEBOOK_ID")
-    or os.environ.get("NOTEBOOKLM_NOTEBOOK")
-    or ""
-).strip()
-NOTEBOOKLM_TIMEOUT_SECONDS = int(os.environ.get("NOTEBOOKLM_TIMEOUT_SECONDS", "30"))
 
 
 def ensure_runtime_directories() -> None:

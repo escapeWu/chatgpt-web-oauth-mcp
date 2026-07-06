@@ -6,18 +6,20 @@ import re
 import shlex
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
 from pathlib import PureWindowsPath
 
-from .tasks import TaskStore
 
-
-TERMINAL_TASK_STATUSES = {"succeeded", "failed", "cancelled"}
 ALLOWED_COMMIT_MODES = {"allowed", "required", "forbidden"}
 IS_WINDOWS = os.name == "nt"
+TIMEOUT_EXIT_CODE = -1
+DEFAULT_DELEGATE_WAIT_SECONDS = 180.0
+DELEGATE_STALL_HINT_SECONDS = 180.0
 
 
 def _split_command(command: str) -> list[str]:
@@ -34,7 +36,7 @@ def _resolve_delegate_command_parts(command: str) -> list[str]:
     parts = _split_command(command)
     if not IS_WINDOWS or not parts:
         return parts
-    if _binary_name(parts[0]) not in {"codex", "claude"}:
+    if _binary_name(parts[0]) != "codex":
         return parts
     resolved = shutil.which(parts[0])
     if resolved:
@@ -73,12 +75,11 @@ _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
 
 
 def _extract_structured_output(text: str) -> object | None:
-    """Best-effort JSON extraction from tool output."""
+    """Best-effort JSON extraction from delegate output."""
     stripped = (text or "").strip()
     if not stripped:
         return None
 
-    # Prefer the last fenced json block if present.
     matches = _JSON_BLOCK_RE.findall(stripped)
     if matches:
         candidate = matches[-1].strip()
@@ -88,33 +89,98 @@ def _extract_structured_output(text: str) -> object | None:
             except json.JSONDecodeError:
                 pass
 
-    # Fallback: entire payload is JSON.
     try:
         return json.loads(stripped)
     except json.JSONDecodeError:
         return None
 
 
-def _cwd_error(command: str, cwd: Path) -> dict[str, object] | None:
+def _delegate_log_root() -> Path:
+    return Path(tempfile.gettempdir()) / "chatgpt-web-oauth-mcp" / "codex-delegates"
+
+
+def _safe_chmod(path: Path, mode: int) -> None:
+    try:
+        path.chmod(mode)
+    except OSError:
+        pass
+
+
+def _write_private_text(path: Path, content: str) -> None:
+    path.write_text(content, encoding="utf-8")
+    _safe_chmod(path, 0o600)
+
+
+def _write_private_json(path: Path, payload: dict[str, object]) -> None:
+    _write_private_text(path, json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+
+
+@dataclass(frozen=True)
+class DelegateLogPaths:
+    log_dir: Path
+    prompt: Path
+    stdout: Path
+    stderr: Path
+    metadata: Path
+
+    def as_payload(self) -> dict[str, str]:
+        return {
+            "log_dir": str(self.log_dir),
+            "prompt": str(self.prompt),
+            "stdout": str(self.stdout),
+            "stderr": str(self.stderr),
+            "metadata": str(self.metadata),
+        }
+
+
+def _create_delegate_logs(delegate_id: str) -> DelegateLogPaths:
+    timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    log_dir = _delegate_log_root() / f"{timestamp}-{delegate_id}"
+    log_dir.mkdir(parents=True, exist_ok=False)
+    _safe_chmod(log_dir, 0o700)
+    return DelegateLogPaths(
+        log_dir=log_dir,
+        prompt=log_dir / "prompt.txt",
+        stdout=log_dir / "stdout.log",
+        stderr=log_dir / "stderr.log",
+        metadata=log_dir / "metadata.json",
+    )
+
+
+def _cwd_error(cwd: Path) -> dict[str, object] | None:
     if not cwd.exists():
         return {
             "success": False,
+            "status": "failed",
             "error": {
                 "code": "cwd_not_found",
                 "message": f"Working directory not found: {cwd}",
             },
             "cwd": str(cwd),
-            "command": command,
+            "executor": "codex",
+            "exit_code": TIMEOUT_EXIT_CODE,
+            "stdout": "",
+            "stderr": "",
+            "summary": "",
+            "timed_out": False,
+            "serial": True,
         }
     if not cwd.is_dir():
         return {
             "success": False,
+            "status": "failed",
             "error": {
                 "code": "cwd_not_directory",
                 "message": f"Working directory is not a directory: {cwd}",
             },
             "cwd": str(cwd),
-            "command": command,
+            "executor": "codex",
+            "exit_code": TIMEOUT_EXIT_CODE,
+            "stdout": "",
+            "stderr": "",
+            "summary": "",
+            "timed_out": False,
+            "serial": True,
         }
     return None
 
@@ -123,42 +189,51 @@ def _cwd_error(command: str, cwd: Path) -> dict[str, object] | None:
 class Invocation:
     args: list[str] | str
     use_shell: bool
+    stdin: bytes | None = None
+
+
+@dataclass
+class ActiveDelegate:
+    delegate_id: str
+    cwd: Path
+    timeout: int
+    output_schema: dict[str, object] | None
+    process: subprocess.Popen[bytes] | None
+    completed_event: threading.Event
+    started_at: float
+    log_paths: DelegateLogPaths
+    lock_wait_seconds: float = 0.0
+    result: dict[str, object] | None = None
+    output_lock: threading.Lock = field(default_factory=threading.Lock)
+    stdout_chunks: list[bytes] = field(default_factory=list)
+    stderr_chunks: list[bytes] = field(default_factory=list)
+    stdout_bytes: int = 0
+    stderr_bytes: int = 0
+    last_output_at: float | None = None
 
 
 class ExecutorRegistry:
-    def __init__(self, *, store: TaskStore, codex_command: str | None, claude_command: str | None) -> None:
-        self.store = store
+    """Run one Codex delegate at a time with long-poll result checks."""
+
+    def __init__(self, *, codex_command: str | None) -> None:
         self.codex_command = codex_command
-        self.claude_command = claude_command
         self._lock = threading.Lock()
-        self._processes: dict[str, subprocess.Popen[str]] = {}
-        self._cancel_events: dict[str, threading.Event] = {}
-        self._completion_events: dict[str, threading.Event] = {}
+        self._active: ActiveDelegate | None = None
 
-    def _register_task(self, task_id: str) -> tuple[threading.Event, threading.Event]:
-        cancel_event = threading.Event()
-        completion_event = threading.Event()
-        with self._lock:
-            self._cancel_events[task_id] = cancel_event
-            self._completion_events[task_id] = completion_event
-        return cancel_event, completion_event
-
-    def _mark_completed(self, task_id: str) -> None:
-        with self._lock:
-            event = self._completion_events.get(task_id)
-        if event is not None:
-            event.set()
-
-    def submit(
+    def run_codex(
         self,
         *,
         task: str | None,
         goal: str | None = None,
-        executor: str,
+        task_id: str | None = None,
         cwd: Path,
         timeout: int,
+        wait_seconds: float = DEFAULT_DELEGATE_WAIT_SECONDS,
+        files_in_scope: list[str] | None = None,
+        out_of_scope: list[str] | None = None,
         context_files: list[str] | None = None,
         acceptance_criteria: list[str] | None = None,
+        done_means: list[str] | None = None,
         verification_commands: list[str] | None = None,
         commit_mode: str = "allowed",
         output_schema: dict[str, object] | None = None,
@@ -166,413 +241,639 @@ class ExecutorRegistry:
     ) -> dict[str, object]:
         normalized_task = (task or "").strip()
         normalized_goal = (goal or "").strip()
+        active = self._current_active()
+        if active is not None:
+            return self._wait_for_active(
+                active,
+                wait_seconds=wait_seconds,
+                attached=True,
+            )
+
         if not normalized_task and not normalized_goal:
             raise ValueError("delegate_task requires task or goal.")
         if commit_mode not in ALLOWED_COMMIT_MODES:
             raise ValueError(f"Unsupported commit_mode: {commit_mode}")
 
-        chosen_executor, command = self._resolve_executor(executor)
-        created = self.store.create(
-            task=normalized_task or normalized_goal,
-            executor=chosen_executor,
-            cwd=str(cwd),
-            timeout=timeout,
-            context_files=context_files,
-            metadata={
-                "goal": normalized_goal or None,
-                "acceptance_criteria": acceptance_criteria or [],
-                "verification_commands": verification_commands or [],
-                "commit_mode": commit_mode,
-                "output_schema": output_schema or None,
-                "parse_structured_output": parse_structured_output,
-            },
-        )
-        cancel_event = threading.Event()
-        with self._lock:
-            self._cancel_events[created["task_id"]] = cancel_event
-        thread = threading.Thread(
-            target=self._run_task,
-            args=(
-                created["task_id"],
-                chosen_executor,
-                command,
-                normalized_task or None,
-                normalized_goal or None,
-                cwd,
-                timeout,
-                cancel_event,
-                context_files or [],
-                acceptance_criteria or [],
-                verification_commands or [],
-                commit_mode,
-                output_schema or None,
-                parse_structured_output,
-            ),
-            daemon=True,
-        )
-        thread.start()
-        return {
-            "task_id": created["task_id"],
-            "executor": chosen_executor,
-            "status": created["status"],
-        }
-
-    def submit_command(
-        self,
-        *,
-        command: str,
-        cwd: Path,
-        timeout: int,
-    ) -> dict[str, object]:
-        cwd_error = _cwd_error(command, cwd)
+        cwd_error = _cwd_error(cwd)
         if cwd_error:
             return cwd_error
-        created = self.store.create(
-            task=command,
-            executor="shell",
-            cwd=str(cwd),
+        if not _command_available(self.codex_command):
+            return {
+                "success": False,
+                "status": "failed",
+                "error": {
+                    "code": "codex_unavailable",
+                    "message": "Codex command is not available.",
+                },
+                "executor": "codex",
+                "cwd": str(cwd),
+                "exit_code": TIMEOUT_EXIT_CODE,
+                "stdout": "",
+                "stderr": "",
+                "summary": "",
+                "timed_out": False,
+                "serial": True,
+                "completed": True,
+            }
+
+        wait_start = time.monotonic()
+        lock_wait_seconds = time.monotonic() - wait_start
+        active = self._start_codex_delegate(
+            task=normalized_task or None,
+            goal=normalized_goal or None,
+            task_id=(task_id or "").strip() or None,
+            cwd=cwd,
             timeout=timeout,
-            context_files=[],
+            files_in_scope=files_in_scope or [],
+            out_of_scope=out_of_scope or [],
+            context_files=context_files or [],
+            acceptance_criteria=acceptance_criteria or [],
+            done_means=done_means or [],
+            verification_commands=verification_commands or [],
+            commit_mode=commit_mode,
+            output_schema=output_schema or None,
+            parse_structured_output=parse_structured_output,
+            lock_wait_seconds=lock_wait_seconds,
         )
-        cancel_event, _ = self._register_task(created["task_id"])
+        if active.result is not None:
+            self._clear_active(active)
+            return active.result
+        return self._wait_for_active(
+            active,
+            wait_seconds=wait_seconds,
+            attached=False,
+        )
+
+    def _current_active(self) -> ActiveDelegate | None:
+        with self._lock:
+            return self._active
+
+    def _clear_active(self, active: ActiveDelegate) -> None:
+        with self._lock:
+            if self._active is active:
+                self._active = None
+
+    def _wait_for_active(
+        self,
+        active: ActiveDelegate,
+        *,
+        wait_seconds: float,
+        attached: bool,
+    ) -> dict[str, object]:
+        wait_seconds = max(float(wait_seconds), 0.0)
+        active.completed_event.wait(timeout=wait_seconds)
+        if active.result is not None:
+            self._clear_active(active)
+            return active.result
+        return self._running_result(
+            active,
+            wait_seconds=wait_seconds,
+            attached=attached,
+        )
+
+    def _start_codex_delegate(
+        self,
+        *,
+        task: str | None,
+        goal: str | None,
+        task_id: str | None,
+        cwd: Path,
+        timeout: int,
+        files_in_scope: list[str],
+        out_of_scope: list[str],
+        context_files: list[str],
+        acceptance_criteria: list[str],
+        done_means: list[str],
+        verification_commands: list[str],
+        commit_mode: str,
+        output_schema: dict[str, object] | None,
+        parse_structured_output: bool,
+        lock_wait_seconds: float,
+    ) -> ActiveDelegate:
+        try:
+            with self._lock:
+                if self._active is not None:
+                    return self._active
+                active = self._start_codex_delegate_impl(
+                    task=task,
+                    goal=goal,
+                    task_id=task_id,
+                    cwd=cwd,
+                    timeout=timeout,
+                    files_in_scope=files_in_scope,
+                    out_of_scope=out_of_scope,
+                    context_files=context_files,
+                    acceptance_criteria=acceptance_criteria,
+                    done_means=done_means,
+                    verification_commands=verification_commands,
+                    commit_mode=commit_mode,
+                    output_schema=output_schema,
+                    parse_structured_output=parse_structured_output,
+                    lock_wait_seconds=lock_wait_seconds,
+                )
+                self._active = active
+        except OSError as exc:
+            completed = threading.Event()
+            delegate_id = uuid.uuid4().hex[:12]
+            log_paths = _create_delegate_logs(delegate_id)
+            _write_private_json(
+                log_paths.metadata,
+                {
+                    "delegate_id": delegate_id,
+                    "status": "failed",
+                    "error": "process_start_failed",
+                    "cwd": str(cwd),
+                    "timeout": timeout,
+                    "started_at_monotonic": time.monotonic(),
+                },
+            )
+            active = ActiveDelegate(
+                delegate_id=delegate_id,
+                cwd=cwd,
+                timeout=timeout,
+                output_schema=output_schema,
+                process=None,
+                completed_event=completed,
+                started_at=time.monotonic(),
+                log_paths=log_paths,
+                lock_wait_seconds=lock_wait_seconds,
+            )
+            active.result = self._result(
+                status="failed",
+                exit_code=TIMEOUT_EXIT_CODE,
+                stdout="",
+                stderr=str(exc),
+                timed_out=False,
+                cwd=cwd,
+                timeout=timeout,
+                output_schema=output_schema,
+                structured_output=None,
+                lock_wait_seconds=lock_wait_seconds,
+                duration_seconds=0.0,
+                delegate_id=active.delegate_id,
+                log_paths=active.log_paths,
+                error={"code": "process_start_failed", "message": str(exc)},
+            )
+            completed.set()
+            return active
         thread = threading.Thread(
-            target=self._run_command_task,
-            args=(created["task_id"], command, cwd, timeout, cancel_event),
+            target=self._communicate_active,
+            args=(active, parse_structured_output),
             daemon=True,
         )
         thread.start()
-        return {
-            "task_id": created["task_id"],
-            "executor": "shell",
-            "status": created["status"],
-        }
+        return active
 
-    def get(self, task_id: str) -> dict[str, object]:
-        meta = self.store.get(task_id)
-        meta["summary"] = self.store.read_summary(task_id)
-        meta["stdout_tail"] = self.store.read_stdout(task_id)[-4000:]
-        meta["stderr_tail"] = self.store.read_stderr(task_id)[-4000:]
-        meta["artifacts"] = []
-        meta["completed"] = meta["status"] in TERMINAL_TASK_STATUSES
-        return meta
-
-    def wait(self, task_id: str, timeout: float, poll_interval: float = 0.5) -> dict[str, object]:
-        """Block until the task reaches a terminal status or ``timeout`` elapses.
-
-        Event-driven when the task was submitted through this registry instance
-        (uses :class:`threading.Event` so there is no wakeup latency). For tasks
-        loaded from disk after a server restart the completion event is not
-        registered, so we fall back to polling ``meta['completed']`` at
-        ``poll_interval`` seconds until the deadline.
-        """
-        # Fast path: already finished.
-        meta = self.get(task_id)
-        if meta["completed"]:
-            meta["timed_out"] = False
-            return meta
-
-        with self._lock:
-            completion_event = self._completion_events.get(task_id)
-
-        remaining = max(float(timeout), 0.0)
-        if completion_event is not None:
-            # Event-driven wait: returns as soon as the worker thread marks
-            # completion, or after ``remaining`` seconds, whichever comes first.
-            completion_event.wait(timeout=remaining)
-            meta = self.get(task_id)
-            meta["timed_out"] = not meta["completed"]
-            return meta
-
-        # Fallback: no registered event (task persisted from a previous run).
-        deadline = time.monotonic() + remaining
-        interval = max(float(poll_interval), 0.05)
-        while True:
-            meta = self.get(task_id)
-            if meta["completed"]:
-                meta["timed_out"] = False
-                return meta
-            if time.monotonic() >= deadline:
-                meta["timed_out"] = True
-                return meta
-            time.sleep(interval)
-
-    def cancel(self, task_id: str) -> dict[str, object]:
-        with self._lock:
-            cancel_event = self._cancel_events.get(task_id)
-            process = self._processes.get(task_id)
-        if cancel_event is not None:
-            cancel_event.set()
-        if process is not None and process.poll() is None:
-            process.kill()
-        updated = self.store.update(task_id, status="cancelled")
-        self._mark_completed(task_id)
-        return {
-            "task_id": task_id,
-            "status": updated["status"],
-            "cancelled": True,
-        }
-
-    def _resolve_executor(self, executor: str) -> tuple[str, str]:
-        if executor == "codex":
-            if not _command_available(self.codex_command):
-                raise RuntimeError("Codex command is not available.")
-            return "codex", self.codex_command or ""
-        if executor == "claude-code":
-            if not _command_available(self.claude_command):
-                raise RuntimeError("Claude Code command is not available.")
-            return "claude-code", self.claude_command or ""
-        if _command_available(self.codex_command):
-            return "codex", self.codex_command or ""
-        if _command_available(self.claude_command):
-            return "claude-code", self.claude_command or ""
-        raise RuntimeError("No delegate executor command is available.")
-
-    def _run_task(
+    def _start_codex_delegate_impl(
         self,
-        task_id: str,
-        executor_name: str,
-        command: str,
+        *,
         task: str | None,
         goal: str | None,
+        task_id: str | None,
         cwd: Path,
         timeout: int,
-        cancel_event: threading.Event,
+        files_in_scope: list[str],
+        out_of_scope: list[str],
         context_files: list[str],
         acceptance_criteria: list[str],
+        done_means: list[str],
         verification_commands: list[str],
         commit_mode: str,
         output_schema: dict[str, object] | None,
         parse_structured_output: bool,
-    ) -> None:
-        try:
-            self._run_task_impl(
-                task_id,
-                executor_name,
-                command,
-                task,
-                goal,
-                cwd,
-                timeout,
-                cancel_event,
-                context_files,
-                acceptance_criteria,
-                verification_commands,
-                commit_mode,
-                output_schema,
-                parse_structured_output,
-            )
-        finally:
-            self._mark_completed(task_id)
-
-    def _run_task_impl(
-        self,
-        task_id: str,
-        executor_name: str,
-        command: str,
-        task: str | None,
-        goal: str | None,
-        cwd: Path,
-        timeout: int,
-        cancel_event: threading.Event,
-        context_files: list[str],
-        acceptance_criteria: list[str],
-        verification_commands: list[str],
-        commit_mode: str,
-        output_schema: dict[str, object] | None,
-        parse_structured_output: bool,
-    ) -> None:
-        if cancel_event.is_set():
-            self.store.update(task_id, status="cancelled")
-            return
-
-        self.store.update(task_id, status="running")
-        invocation = self._build_invocation(
-            executor_name=executor_name,
-            command=command,
+        lock_wait_seconds: float,
+    ) -> ActiveDelegate:
+        prompt = self._build_prompt(
             task=task,
             goal=goal,
-            cwd=cwd,
+            task_id=task_id,
+            files_in_scope=files_in_scope,
+            out_of_scope=out_of_scope,
             context_files=context_files,
             acceptance_criteria=acceptance_criteria,
+            done_means=done_means,
             verification_commands=verification_commands,
             commit_mode=commit_mode,
         )
-        process = subprocess.Popen(
-            invocation.args,
-            cwd=str(cwd),
-            shell=invocation.use_shell,
-            text=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+        invocation = self._build_invocation_from_prompt(
+            command=self.codex_command or "",
+            cwd=cwd,
+            prompt=prompt,
         )
-        with self._lock:
-            self._processes[task_id] = process
-
-        if cancel_event.is_set() and process.poll() is None:
-            process.kill()
-
-        try:
-            stdout, stderr = process.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            stdout, stderr = process.communicate()
-            stdout = _decode_output(stdout)
-            stderr = _decode_output(stderr)
-            self.store.write_logs(task_id, stdout=stdout, stderr=stderr)
-            self.store.write_summary(task_id, _summarize(stdout, stderr))
-            self.store.update(task_id, status="failed", timed_out=True)
-            return
-        finally:
-            with self._lock:
-                self._processes.pop(task_id, None)
-
-        stdout = _decode_output(stdout)
-        stderr = _decode_output(stderr)
-        self.store.write_logs(task_id, stdout=stdout, stderr=stderr)
-        self.store.write_summary(task_id, _summarize(stdout, stderr))
-
-        structured_output = None
-        if parse_structured_output:
-            structured_output = _extract_structured_output(stdout) or _extract_structured_output(stderr)
-
-        if cancel_event.is_set() or self.store.get(task_id)["status"] == "cancelled":
-            self.store.update(task_id, status="cancelled")
-            return
-
-        status = "succeeded" if process.returncode == 0 else "failed"
-        self.store.update(
-            task_id,
-            status=status,
-            exit_code=process.returncode,
-            structured_output=structured_output,
-            output_schema=output_schema or None,
+        delegate_id = uuid.uuid4().hex[:12]
+        log_paths = _create_delegate_logs(delegate_id)
+        _write_private_text(log_paths.prompt, prompt)
+        _write_private_json(
+            log_paths.metadata,
+            {
+                "delegate_id": delegate_id,
+                "status": "started",
+                "cwd": str(cwd),
+                "timeout": timeout,
+                "commit_mode": commit_mode,
+                "task_id": task_id,
+                "files_in_scope": files_in_scope,
+                "out_of_scope": out_of_scope,
+                "context_files": context_files,
+                "acceptance_criteria": acceptance_criteria,
+                "done_means": done_means,
+                "verification_commands": verification_commands,
+                "started_at_monotonic": time.monotonic(),
+                "command_kind": "shell" if invocation.use_shell else "argv",
+            },
         )
-
-    def _run_command_task(
-        self,
-        task_id: str,
-        command: str,
-        cwd: Path,
-        timeout: int,
-        cancel_event: threading.Event,
-    ) -> None:
-        try:
-            self._run_command_task_impl(task_id, command, cwd, timeout, cancel_event)
-        finally:
-            self._mark_completed(task_id)
-
-    def _run_command_task_impl(
-        self,
-        task_id: str,
-        command: str,
-        cwd: Path,
-        timeout: int,
-        cancel_event: threading.Event,
-    ) -> None:
-        if cancel_event.is_set():
-            self.store.update(task_id, status="cancelled")
-            return
-
-        self.store.update(task_id, status="running")
+        started_at = time.monotonic()
         try:
             process = subprocess.Popen(
-                command,
+                invocation.args,
                 cwd=str(cwd),
-                shell=True,
+                shell=invocation.use_shell,
                 text=False,
+                stdin=subprocess.PIPE if invocation.stdin is not None else None,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
         except OSError as exc:
-            self.store.write_logs(task_id, stdout="", stderr=str(exc))
-            self.store.write_summary(task_id, str(exc))
-            self.store.update(task_id, status="failed")
+            completed = threading.Event()
+            active = ActiveDelegate(
+                delegate_id=delegate_id,
+                cwd=cwd,
+                timeout=timeout,
+                output_schema=output_schema,
+                process=None,
+                completed_event=completed,
+                started_at=started_at,
+                log_paths=log_paths,
+                lock_wait_seconds=lock_wait_seconds,
+            )
+            active.result = self._result(
+                status="failed",
+                exit_code=TIMEOUT_EXIT_CODE,
+                stdout="",
+                stderr=str(exc),
+                timed_out=False,
+                cwd=cwd,
+                timeout=timeout,
+                output_schema=output_schema,
+                structured_output=None,
+                lock_wait_seconds=lock_wait_seconds,
+                duration_seconds=0.0,
+                delegate_id=delegate_id,
+                log_paths=log_paths,
+                error={"code": "process_start_failed", "message": str(exc)},
+            )
+            _write_private_json(
+                log_paths.metadata,
+                {
+                    "delegate_id": delegate_id,
+                    "status": "failed",
+                    "error": {"code": "process_start_failed", "message": str(exc)},
+                    "cwd": str(cwd),
+                    "timeout": timeout,
+                    "logs": log_paths.as_payload(),
+                },
+            )
+            completed.set()
+            return active
+        if invocation.stdin is not None and getattr(process, "stdin", None) is not None:
+            threading.Thread(
+                target=self._write_process_stdin,
+                args=(process, invocation.stdin),
+                daemon=True,
+            ).start()
+        return ActiveDelegate(
+            delegate_id=delegate_id,
+            cwd=cwd,
+            timeout=timeout,
+            output_schema=output_schema,
+            process=process,
+            completed_event=threading.Event(),
+            started_at=started_at,
+            log_paths=log_paths,
+            lock_wait_seconds=lock_wait_seconds,
+        )
+
+    def _build_invocation_from_prompt(
+        self,
+        *,
+        command: str,
+        cwd: Path,
+        prompt: str,
+    ) -> Invocation:
+        parts = _resolve_delegate_command_parts(command)
+        if parts and _binary_name(parts[0]) == "codex":
+            args = [
+                *parts,
+                "exec",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "-C",
+                str(cwd),
+            ]
+            if not (cwd / ".git").exists():
+                args.append("--skip-git-repo-check")
+            args.append("-")
+            return Invocation(args=args, use_shell=False, stdin=prompt.encode("utf-8"))
+        return Invocation(args=command, use_shell=True)
+
+    def _write_process_stdin(self, process: subprocess.Popen[bytes], payload: bytes) -> None:
+        if process.stdin is None:
             return
-        with self._lock:
-            self._processes[task_id] = process
-
-        if cancel_event.is_set() and process.poll() is None:
-            process.kill()
-
         try:
-            stdout, stderr = process.communicate(timeout=timeout)
+            process.stdin.write(payload)
+            process.stdin.close()
+        except OSError:
+            pass
+
+    def _communicate_active(self, active: ActiveDelegate, parse_structured_output: bool) -> None:
+        if active.process is None:
+            active.completed_event.set()
+            return
+        stdout_stream = getattr(active.process, "stdout", None)
+        stderr_stream = getattr(active.process, "stderr", None)
+        stdout_thread: threading.Thread | None = None
+        stderr_thread: threading.Thread | None = None
+        try:
+            if stdout_stream is None or stderr_stream is None:
+                stdout_raw, stderr_raw = active.process.communicate(timeout=active.timeout)
+                self._record_fallback_output(active, "stdout", stdout_raw, active.log_paths.stdout)
+                self._record_fallback_output(active, "stderr", stderr_raw, active.log_paths.stderr)
+            else:
+                active.log_paths.stdout.touch()
+                active.log_paths.stderr.touch()
+                _safe_chmod(active.log_paths.stdout, 0o600)
+                _safe_chmod(active.log_paths.stderr, 0o600)
+                stdout_thread = threading.Thread(
+                    target=self._read_stream_to_log,
+                    args=(active, "stdout", stdout_stream, active.log_paths.stdout),
+                    daemon=True,
+                )
+                stderr_thread = threading.Thread(
+                    target=self._read_stream_to_log,
+                    args=(active, "stderr", stderr_stream, active.log_paths.stderr),
+                    daemon=True,
+                )
+                stdout_thread.start()
+                stderr_thread.start()
+                active.process.wait(timeout=active.timeout)
+                stdout_thread.join(timeout=5)
+                stderr_thread.join(timeout=5)
+                stdout_raw = b"".join(active.stdout_chunks)
+                stderr_raw = b"".join(active.stderr_chunks)
+            timed_out = False
         except subprocess.TimeoutExpired:
-            process.kill()
-            stdout, stderr = process.communicate()
-            stdout = _decode_output(stdout)
-            stderr = _decode_output(stderr)
-            self.store.write_logs(task_id, stdout=stdout, stderr=stderr)
-            self.store.write_summary(task_id, _summarize(stdout, stderr))
-            self.store.update(task_id, status="failed", timed_out=True)
-            return
-        finally:
-            with self._lock:
-                self._processes.pop(task_id, None)
+            active.process.kill()
+            if stdout_stream is None or stderr_stream is None:
+                stdout_raw, stderr_raw = active.process.communicate()
+                self._record_fallback_output(active, "stdout", stdout_raw, active.log_paths.stdout)
+                self._record_fallback_output(active, "stderr", stderr_raw, active.log_paths.stderr)
+            else:
+                active.process.wait()
+                if stdout_thread is not None:
+                    stdout_thread.join(timeout=5)
+                if stderr_thread is not None:
+                    stderr_thread.join(timeout=5)
+                stdout_raw = b"".join(active.stdout_chunks)
+                stderr_raw = b"".join(active.stderr_chunks)
+            timed_out = True
 
-        stdout = _decode_output(stdout)
-        stderr = _decode_output(stderr)
-        self.store.write_logs(task_id, stdout=stdout, stderr=stderr)
-        self.store.write_summary(task_id, _summarize(stdout, stderr))
-        structured_output = _extract_structured_output(stdout) or _extract_structured_output(stderr)
+        stdout = _decode_output(stdout_raw)
+        stderr = _decode_output(stderr_raw)
+        structured_output = None
+        if parse_structured_output:
+            structured_output = _extract_structured_output(stdout) or _extract_structured_output(stderr)
 
-        if cancel_event.is_set() or self.store.get(task_id)["status"] == "cancelled":
-            self.store.update(task_id, status="cancelled")
-            return
+        exit_code = active.process.returncode if not timed_out else TIMEOUT_EXIT_CODE
+        status = "succeeded" if exit_code == 0 else "failed"
+        error = None
+        if timed_out:
+            error = {
+                "code": "timed_out",
+                "message": f"Codex delegate exceeded the {active.timeout}s timeout.",
+            }
 
-        status = "succeeded" if process.returncode == 0 else "failed"
-        self.store.update(task_id, status=status, exit_code=process.returncode, structured_output=structured_output)
+        active.result = self._result(
+            status=status,
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
+            timed_out=timed_out,
+            cwd=active.cwd,
+            timeout=active.timeout,
+            output_schema=active.output_schema,
+            structured_output=structured_output,
+            lock_wait_seconds=active.lock_wait_seconds,
+            duration_seconds=time.monotonic() - active.started_at,
+            delegate_id=active.delegate_id,
+            log_paths=active.log_paths,
+            error=error,
+        )
+        self._finalize_log_metadata(
+            active=active,
+            status=status,
+            exit_code=exit_code,
+            timed_out=timed_out,
+            duration_seconds=time.monotonic() - active.started_at,
+            error=error,
+        )
+        active.completed_event.set()
+
+    def _read_stream_to_log(self, active: ActiveDelegate, stream_name: str, stream, path: Path) -> None:
+        chunks = active.stdout_chunks if stream_name == "stdout" else active.stderr_chunks
+        with path.open("ab") as handle:
+            while True:
+                chunk = stream.read(4096)
+                if not chunk:
+                    break
+                if isinstance(chunk, str):
+                    chunk = chunk.encode("utf-8", errors="replace")
+                handle.write(chunk)
+                handle.flush()
+                with active.output_lock:
+                    chunks.append(chunk)
+                    if stream_name == "stdout":
+                        active.stdout_bytes += len(chunk)
+                    else:
+                        active.stderr_bytes += len(chunk)
+                    active.last_output_at = time.monotonic()
+
+    def _record_fallback_output(
+        self,
+        active: ActiveDelegate,
+        stream_name: str,
+        value: str | bytes | None,
+        path: Path,
+    ) -> None:
+        chunk = value or b""
+        if isinstance(chunk, str):
+            chunk = chunk.encode("utf-8", errors="replace")
+        path.write_bytes(chunk)
+        _safe_chmod(path, 0o600)
+        chunks = active.stdout_chunks if stream_name == "stdout" else active.stderr_chunks
+        with active.output_lock:
+            chunks.append(chunk)
+            if stream_name == "stdout":
+                active.stdout_bytes += len(chunk)
+            else:
+                active.stderr_bytes += len(chunk)
+            if chunk:
+                active.last_output_at = time.monotonic()
+
+    def _finalize_log_metadata(
+        self,
+        *,
+        active: ActiveDelegate,
+        status: str,
+        exit_code: int,
+        timed_out: bool,
+        duration_seconds: float,
+        error: dict[str, object] | None,
+    ) -> None:
+        payload: dict[str, object] = {
+            "delegate_id": active.delegate_id,
+            "status": status,
+            "exit_code": exit_code,
+            "timed_out": timed_out,
+            "cwd": str(active.cwd),
+            "timeout": active.timeout,
+            "duration_seconds": round(duration_seconds, 3),
+            "stdout_bytes": active.stdout_bytes,
+            "stderr_bytes": active.stderr_bytes,
+            "last_output_seconds_ago": self._last_output_seconds_ago(active),
+            "logs": active.log_paths.as_payload(),
+        }
+        if active.process is not None and getattr(active.process, "pid", None) is not None:
+            payload["pid"] = active.process.pid
+        if error is not None:
+            payload["error"] = error
+        _write_private_json(active.log_paths.metadata, payload)
+
+    def _running_result(
+        self,
+        active: ActiveDelegate,
+        *,
+        wait_seconds: float,
+        attached: bool,
+    ) -> dict[str, object]:
+        quiet_seconds = self._last_output_seconds_ago(active)
+        activity_state = "active"
+        if active.last_output_at is None:
+            activity_state = "starting_or_quiet"
+        if quiet_seconds is not None and quiet_seconds >= DELEGATE_STALL_HINT_SECONDS:
+            activity_state = "suspected_stalled"
+        return {
+            "success": True,
+            "status": "running",
+            "in_progress": True,
+            "completed": False,
+            "executor": "codex",
+            "cwd": str(active.cwd),
+            "delegate_id": active.delegate_id,
+            "pid": getattr(active.process, "pid", None),
+            "serial": True,
+            "attached_to_running_delegate": attached,
+            "elapsed_seconds": round(time.monotonic() - active.started_at, 3),
+            "activity_state": activity_state,
+            "last_output_seconds_ago": quiet_seconds,
+            "stdout_bytes": active.stdout_bytes,
+            "stderr_bytes": active.stderr_bytes,
+            "logs": active.log_paths.as_payload(),
+            "wait_seconds": round(wait_seconds, 3),
+            "timeout": active.timeout,
+            "timed_out": False,
+            "wait_timed_out": True,
+            "message": "Codex delegate is still running. Call delegate_task again to continue waiting.",
+            "next": "call delegate_task again without task/goal, or repeat the same delegate_task call",
+        }
+
+    def _result(
+        self,
+        *,
+        status: str,
+        exit_code: int,
+        stdout: str,
+        stderr: str,
+        timed_out: bool,
+        cwd: Path,
+        timeout: int,
+        output_schema: dict[str, object] | None,
+        structured_output: object | None,
+        lock_wait_seconds: float,
+        duration_seconds: float,
+        delegate_id: str,
+        log_paths: DelegateLogPaths,
+        error: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "success": status == "succeeded",
+            "status": status,
+            "completed": True,
+            "in_progress": False,
+            "executor": "codex",
+            "cwd": str(cwd),
+            "delegate_id": delegate_id,
+            "logs": log_paths.as_payload(),
+            "exit_code": exit_code,
+            "stdout": stdout,
+            "stderr": stderr,
+            "summary": _summarize(stdout, stderr),
+            "timed_out": timed_out,
+            "wait_timed_out": False,
+            "timeout": timeout,
+            "serial": True,
+            "lock_wait_seconds": round(lock_wait_seconds, 3),
+            "duration_seconds": round(duration_seconds, 3),
+            "structured_output": structured_output,
+            "output_schema": output_schema,
+        }
+        if error is not None:
+            payload["error"] = error
+        return payload
+
+    def _last_output_seconds_ago(self, active: ActiveDelegate) -> float | None:
+        reference = active.last_output_at or active.started_at
+        return round(time.monotonic() - reference, 3)
 
     def _build_invocation(
         self,
         *,
-        executor_name: str,
         command: str,
         task: str | None,
         goal: str | None,
+        task_id: str | None = None,
         cwd: Path,
-        context_files: list[str],
-        acceptance_criteria: list[str],
-        verification_commands: list[str],
+        files_in_scope: list[str] | None = None,
+        out_of_scope: list[str] | None = None,
+        context_files: list[str] | None = None,
+        acceptance_criteria: list[str] | None = None,
+        done_means: list[str] | None = None,
+        verification_commands: list[str] | None = None,
         commit_mode: str,
     ) -> Invocation:
         prompt = self._build_prompt(
             task=task,
             goal=goal,
-            context_files=context_files,
-            acceptance_criteria=acceptance_criteria,
-            verification_commands=verification_commands,
+            task_id=task_id,
+            files_in_scope=files_in_scope or [],
+            out_of_scope=out_of_scope or [],
+            context_files=context_files or [],
+            acceptance_criteria=acceptance_criteria or [],
+            done_means=done_means or [],
+            verification_commands=verification_commands or [],
             commit_mode=commit_mode,
         )
-        if executor_name == "codex":
-            parts = _resolve_delegate_command_parts(command)
-            if _binary_name(parts[0]) == "codex":
-                args = [
-                    *parts,
-                    "exec",
-                    "--dangerously-bypass-approvals-and-sandbox",
-                    "-C",
-                    str(cwd),
-                ]
-                if not (cwd / ".git").exists():
-                    args.append("--skip-git-repo-check")
-                args.append(prompt)
-                return Invocation(args=args, use_shell=False)
-        if executor_name == "claude-code":
-            parts = _resolve_delegate_command_parts(command)
-            if _binary_name(parts[0]) == "claude":
-                return Invocation(
-                    args=[
-                        *parts,
-                        "--print",
-                        "--dangerously-skip-permissions",
-                        "--permission-mode",
-                        "bypassPermissions",
-                        "--output-format",
-                        "text",
-                        prompt,
-                    ],
-                    use_shell=False,
-                )
+        parts = _resolve_delegate_command_parts(command)
+        if parts and _binary_name(parts[0]) == "codex":
+            args = [
+                *parts,
+                "exec",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "-C",
+                str(cwd),
+            ]
+            if not (cwd / ".git").exists():
+                args.append("--skip-git-repo-check")
+            args.append("-")
+            return Invocation(args=args, use_shell=False, stdin=prompt.encode("utf-8"))
         return Invocation(args=command, use_shell=True)
 
     def _build_prompt(
@@ -580,19 +881,44 @@ class ExecutorRegistry:
         *,
         task: str | None,
         goal: str | None,
+        task_id: str | None = None,
+        files_in_scope: list[str] | None = None,
+        out_of_scope: list[str] | None = None,
         context_files: list[str],
         acceptance_criteria: list[str],
+        done_means: list[str] | None = None,
         verification_commands: list[str],
         commit_mode: str,
     ) -> str:
-        lines: list[str] = []
+        lines: list[str] = [
+            "Architecture contract:",
+            "- ChatGPT Web is the architect/manager/reviewer.",
+            "- Codex is the local executor for exactly one bounded execution slice.",
+            "- Execute only the scoped task below; do not expand into a broad planning or research loop.",
+            "- If the task is too broad or underspecified, stop and report blocked with the smallest useful next execution prompt.",
+            "",
+        ]
+        if task_id:
+            lines.extend(["Task ID:", task_id, ""])
         if goal:
             lines.extend(["Goal:", goal, ""])
         if task:
             lines.extend(["Task:", task, ""])
+        if files_in_scope:
+            lines.append("Files in scope:")
+            lines.extend(f"- {item}" for item in files_in_scope)
+            lines.append("")
+        if out_of_scope:
+            lines.append("Out of scope:")
+            lines.extend(f"- {item}" for item in out_of_scope)
+            lines.append("")
         if acceptance_criteria:
             lines.append("Acceptance criteria:")
             lines.extend(f"- {item}" for item in acceptance_criteria)
+            lines.append("")
+        if done_means:
+            lines.append("Done means:")
+            lines.extend(f"- {item}" for item in done_means)
             lines.append("")
         if verification_commands:
             lines.append("Verification commands:")
@@ -602,4 +928,13 @@ class ExecutorRegistry:
         if context_files:
             lines.extend(["", "Context files:"])
             lines.extend(f"- {path}" for path in context_files)
+        lines.extend(
+            [
+                "",
+                "Output contract:",
+                "- Return a compact execution manifest: status, files changed, commands run, verification result, deviations or blockers.",
+                "- Do not claim done unless the acceptance criteria passed locally, or clearly state which checks were not run.",
+                "- Suggest at most one next small execution prompt if more work remains.",
+            ]
+        )
         return "\n".join(lines)

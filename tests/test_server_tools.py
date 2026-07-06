@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
+import shlex
+import sys
 from pathlib import Path
 
 from chatgpt_web_oauth_mcp.executors import ExecutorRegistry
-from chatgpt_web_oauth_mcp.taskboard import TaskBoardStore
-from chatgpt_web_oauth_mcp.tasks import TaskStore
 
 
 def _call(tool, *args, **kwargs):
@@ -15,6 +14,10 @@ def _call(tool, *args, **kwargs):
     if asyncio.iscoroutine(result):
         return asyncio.run(result)
     return result
+
+
+def _python_cmd(code: str) -> str:
+    return f"{shlex.quote(sys.executable)} -c {shlex.quote(code)}"
 
 
 def test_server_apply_patch_tool_updates_file(tmp_path: Path) -> None:
@@ -40,30 +43,6 @@ def test_server_apply_patch_tool_updates_file(tmp_path: Path) -> None:
 
     assert result["success"] is True
     assert target.read_text(encoding="utf-8") == "hello\nthere\n"
-
-
-def test_server_run_command_can_dispatch_background_tasks(tmp_path: Path) -> None:
-    from chatgpt_web_oauth_mcp import server
-
-    server.registry = ExecutorRegistry(
-        store=TaskStore(tmp_path / "state"),
-        codex_command="python3 -c \"print('codex')\"",
-        claude_command="python3 -c \"print('claude')\"",
-    )
-
-    queued = _call(
-        server.run_command,
-        command="python3 -c \"print('background')\"",
-        cwd=str(tmp_path),
-        timeout=5,
-        run_in_background=True,
-    )
-    result = _call(server.wait_task, queued["task_id"], timeout=2, poll_interval=0.05)
-
-    assert queued["executor"] == "shell"
-    assert queued["status"] == "queued"
-    assert result["status"] == "succeeded"
-    assert "background" in result["stdout_tail"]
 
 
 def test_server_read_text_tool_returns_multiple_file_results(tmp_path: Path) -> None:
@@ -110,6 +89,98 @@ def test_server_search_tool_unifies_regex_text_and_glob(tmp_path: Path) -> None:
     assert regex_result["success"] is True
     assert regex_result["mode"] == "regex"
     assert {Path(path).name for path in regex_result["files"]} == {"one.py", "two.txt"}
+
+
+def test_server_search_supports_batch_modes(tmp_path: Path) -> None:
+    from chatgpt_web_oauth_mcp import server
+
+    first = tmp_path / "one.py"
+    second = tmp_path / "two.txt"
+    first.write_text("alpha\nTODO: fix me\n", encoding="utf-8")
+    second.write_text("beta\nTODO: docs\n", encoding="utf-8")
+
+    sequential = _call(
+        server.search,
+        mode="sequential",
+        path=str(tmp_path),
+        queries=[
+            {"mode": "glob", "pattern": "*.py"},
+            {"mode": "text", "query": "TODO", "limit": 10},
+        ],
+    )
+    parallel = _call(
+        server.search,
+        mode="parallel",
+        path=str(tmp_path),
+        queries=[
+            {"mode": "regex", "pattern": r"TODO:\s+\w+", "output_mode": "files_with_matches"},
+            {"mode": "text", "path": str(first), "query": "alpha"},
+        ],
+        max_concurrency=2,
+    )
+
+    assert sequential["success"] is True
+    assert sequential["mode"] == "batch"
+    assert sequential["execution_mode"] == "sequential"
+    assert sequential["max_concurrency"] == 1
+    assert [item["index"] for item in sequential["results"]] == [0, 1]
+    assert [Path(item["path"]).name for item in sequential["results"][0]["matches"]] == ["one.py"]
+    assert len(sequential["results"][1]["matches"]) == 2
+
+    assert parallel["success"] is True
+    assert parallel["execution_mode"] == "parallel"
+    assert parallel["max_concurrency"] == 2
+    assert [item["index"] for item in parallel["results"]] == [0, 1]
+    assert {Path(path).name for path in parallel["results"][0]["files"]} == {"one.py", "two.txt"}
+    assert parallel["results"][1]["matches"][0]["path"] == str(first)
+
+
+def test_server_search_batch_validates_inputs(tmp_path: Path) -> None:
+    from chatgpt_web_oauth_mcp import server
+
+    empty = _call(server.search, mode="parallel", queries=[])
+    too_much_concurrency = _call(
+        server.search,
+        mode="parallel",
+        path=str(tmp_path),
+        queries=[{"mode": "glob", "pattern": "*.py"}],
+        max_concurrency=4,
+    )
+
+    assert empty["success"] is False
+    assert empty["error"]["code"] == "invalid_arguments"
+    assert too_much_concurrency["success"] is False
+    assert too_much_concurrency["error"]["code"] == "invalid_arguments"
+
+
+def test_server_run_command_supports_batch_modes(tmp_path: Path) -> None:
+    from chatgpt_web_oauth_mcp import server
+
+    sequential = _call(
+        server.run_command,
+        commands=[_python_cmd("print('one')"), _python_cmd("print('two')")],
+        cwd=str(tmp_path),
+        timeout=5,
+        mode="sequential",
+    )
+    parallel = _call(
+        server.run_command,
+        commands=[_python_cmd("print('red')"), _python_cmd("print('blue')")],
+        cwd=str(tmp_path),
+        timeout=5,
+        mode="parallel",
+        max_concurrency=2,
+    )
+
+    assert sequential["success"] is True
+    assert sequential["mode"] == "batch"
+    assert sequential["execution_mode"] == "sequential"
+    assert [item["stdout"].strip() for item in sequential["results"]] == ["one", "two"]
+
+    assert parallel["success"] is True
+    assert parallel["execution_mode"] == "parallel"
+    assert parallel["max_concurrency"] == 2
+    assert [item["stdout"].strip() for item in parallel["results"]] == ["red", "blue"]
 
 
 def test_server_read_text_supports_single_and_batch_modes(tmp_path: Path) -> None:
@@ -206,118 +277,28 @@ def test_server_search_supports_single_file_path_for_text_and_regex(tmp_path: Pa
 def test_server_delegate_task_accepts_structured_fields(tmp_path: Path) -> None:
     from chatgpt_web_oauth_mcp import server
 
-    server.registry = ExecutorRegistry(
-        store=TaskStore(tmp_path / "state"),
-        codex_command="python3 -c \"print('codex')\"",
-        claude_command="python3 -c \"print('claude')\"",
-    )
-
-    queued = _call(
-        server.delegate_task,
-        task="Implement the fallback flow",
-        goal="Ship a working fallback task runner",
-        cwd=str(tmp_path),
-        acceptance_criteria=["Tool returns structured status"],
-        verification_commands=["pytest -q"],
-        commit_mode="allowed",
-    )
-    meta = _call(server.get_task, queued["task_id"])
-
-    assert meta["goal"] == "Ship a working fallback task runner"
-    assert meta["acceptance_criteria"] == ["Tool returns structured status"]
-    assert meta["verification_commands"] == ["pytest -q"]
-    assert meta["commit_mode"] == "allowed"
-
-
-def test_server_run_command_stream_returns_task_polling_hint(tmp_path: Path) -> None:
-    from chatgpt_web_oauth_mcp import server
-
     old_registry = server.registry
     try:
-        server.registry = ExecutorRegistry(
-            store=TaskStore(tmp_path / "state"),
-            codex_command="python3 -c \"print('codex')\"",
-            claude_command="python3 -c \"print('claude')\"",
-        )
-
-        queued = _call(
-            server.run_command_stream,
-            command="python3 -c \"print('stream')\"",
+        server.registry = ExecutorRegistry(codex_command="python3 -c \"print('{\\\"ok\\\": true}')\"")
+        result = _call(
+            server.delegate_task,
+            task="Implement the fallback flow",
+            goal="Ship a working fallback task runner",
             cwd=str(tmp_path),
-            timeout=5,
+            acceptance_criteria=["Tool returns structured status"],
+            verification_commands=["pytest -q"],
+            commit_mode="allowed",
+            output_schema={"type": "object"},
         )
-        result = _call(server.wait_task, queued["task_id"], timeout=2, poll_interval=0.05)
 
-        assert queued["stream_mode"] == "task-polling"
-        assert "next" in queued
         assert result["status"] == "succeeded"
-        assert "stream" in result["stdout_tail"]
+        assert result["executor"] == "codex"
+        assert result["serial"] is True
+        assert result["structured_output"] == {"ok": True}
+        assert result["output_schema"] == {"type": "object"}
+        assert "task_id" not in result
     finally:
         server.registry = old_registry
-
-
-def test_server_purge_tasks_dry_run_reports_candidates(tmp_path: Path) -> None:
-    from chatgpt_web_oauth_mcp import server
-
-    old_store = server.store
-    old_registry = server.registry
-    try:
-        server.store = TaskStore(tmp_path / "state")
-        server.registry = ExecutorRegistry(
-            store=server.store,
-            codex_command="python3 -c \"print('codex')\"",
-            claude_command="python3 -c \"print('claude')\"",
-        )
-
-        created = server.store.create(task="old", executor="shell", cwd=str(tmp_path))
-        meta_path = server.store._task_dir(created["task_id"]) / "meta.json"  # noqa: SLF001
-        payload = json.loads(meta_path.read_text(encoding="utf-8"))
-        payload["updated_at"] = "2000-01-01T00:00:00+00:00"
-        meta_path.write_text(json.dumps(payload), encoding="utf-8")
-
-        result = _call(server.purge_tasks, older_than_hours=1, dry_run=True)
-
-        assert result["success"] is True
-        assert result["purged"] == 1
-        assert created["task_id"] in result["task_ids"]
-    finally:
-        server.store = old_store
-        server.registry = old_registry
-
-
-def test_server_taskboard_tools_create_delegate_dry_run_and_list(tmp_path: Path) -> None:
-    from chatgpt_web_oauth_mcp import server
-
-    old_store = server.taskboard_store
-    try:
-        server.taskboard_store = TaskBoardStore(tmp_path / "state")
-        created = _call(
-            server.taskboard_create,
-            title="Board",
-            original_request="Create and track two manual subtasks.",
-            cwd=str(tmp_path),
-            worktree_mode="none",
-            tasks=[{"title": "One", "task": "Do one"}],
-        )
-        board_id = created["board"]["board_id"]
-        added = _call(
-            server.taskboard_add_task,
-            board_id=board_id,
-            title="Two",
-            task="Do two",
-        )
-        dry_run = _call(server.taskboard_delegate, board_id=board_id, dry_run=True, max_parallel=1)
-        listed = _call(server.taskboard_list)
-
-        assert created["success"] is True
-        assert created["board"]["status"] == "draft"
-        assert "original_request" not in created["board"]
-        assert created["board_detail"]["original_request"] == "Create and track two manual subtasks."
-        assert added["board"]["counts"]["pending"] == 2
-        assert len(dry_run["would_submit"]) == 1
-        assert listed["boards"][0]["board_id"] == board_id
-    finally:
-        server.taskboard_store = old_store
 
 
 def test_server_apply_patch_tool_description_uses_generic_patch_language() -> None:
@@ -336,6 +317,42 @@ def test_server_apply_patch_tool_description_uses_generic_patch_language() -> No
 
     assert "codex-style" not in description
     assert "*** Begin Patch" in description
+
+
+def test_registered_tool_input_schemas_document_parameters() -> None:
+    from chatgpt_web_oauth_mcp import server
+
+    async def scenario() -> dict[str, dict[str, object]]:
+        list_tools = getattr(server.mcp, "_list_tools")
+        try:
+            tools = await list_tools()
+        except TypeError:
+            tools = await list_tools(None)
+        return {tool.name: tool.parameters for tool in tools}
+
+    schemas = asyncio.run(scenario())
+    missing = []
+    for tool_name, schema in schemas.items():
+        for param_name, spec in schema.get("properties", {}).items():
+            if not spec.get("description"):
+                missing.append(f"{tool_name}.{param_name}")
+
+    assert missing == []
+    assert schemas["delegate_task"]["properties"]["commit_mode"]["enum"] == [
+        "allowed",
+        "required",
+        "forbidden",
+    ]
+    for name in ["command", "commands", "mode", "max_concurrency"]:
+        assert name in schemas["run_command"]["properties"]
+    for name in ["queries", "mode", "max_concurrency"]:
+        assert name in schemas["search"]["properties"]
+    assert schemas["run_command"]["properties"]["mode"]["enum"] == [
+        "sequential",
+        "parallel",
+    ]
+    for name in ["task_id", "files_in_scope", "out_of_scope", "done_means"]:
+        assert name in schemas["delegate_task"]["properties"]
 
 
 def test_server_tools_expose_chatgpt_compatible_annotations() -> None:
@@ -367,6 +384,15 @@ def test_server_tools_expose_chatgpt_compatible_annotations() -> None:
     assert annotations["write_file"]["destructiveHint"] is True
     assert annotations["run_command"]["openWorldHint"] is True
     assert annotations["delegate_task"]["openWorldHint"] is True
-    assert annotations["taskboard_create"]["readOnlyHint"] is False
-    assert annotations["taskboard_delegate"]["openWorldHint"] is True
-    assert annotations["taskboard_status"]["readOnlyHint"] is True
+    for removed in [
+        "run_command_stream",
+        "get_task",
+        "wait_task",
+        "cancel_task",
+        "purge_tasks",
+        "taskboard_create",
+        "taskboard_delegate",
+        "taskboard_status",
+        "list_skills",
+    ]:
+        assert removed not in annotations

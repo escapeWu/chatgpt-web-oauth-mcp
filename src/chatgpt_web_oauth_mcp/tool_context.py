@@ -46,7 +46,6 @@ class ToolContext:
     global_value: Callable[[str, Any], Any]
     current_oauth_config: Callable[[], Any]
     current_obsidian_config: Callable[[], Any]
-    current_notebooklm_config: Callable[[], Any]
 
     def _get(self, name: str, default: Any = None) -> Any:
         return self.global_value(name, default)
@@ -88,68 +87,16 @@ class ToolContext:
         return self._get("CODEX_COMMAND")
 
     @property
-    def claude_command(self) -> str | None:
-        return self._get("CLAUDE_COMMAND")
-
-    @property
     def enable_obsidian(self) -> bool:
         return bool(self._get("ENABLE_OBSIDIAN", False))
-
-    @property
-    def enable_notebooklm(self) -> bool:
-        return bool(self._get("ENABLE_NOTEBOOKLM", False))
 
     @property
     def obsidian_api_key(self) -> str:
         return str(self._get("OBSIDIAN_API_KEY", "") or "")
 
     @property
-    def notebooklm_storage_path(self) -> str:
-        return str(self._get("NOTEBOOKLM_STORAGE_PATH", "") or "")
-
-    @property
-    def notebooklm_profile(self) -> str:
-        return str(self._get("NOTEBOOKLM_PROFILE", "") or "")
-
-    @property
-    def notebooklm_command(self) -> str:
-        return str(self._get("NOTEBOOKLM_COMMAND", "notebooklm") or "notebooklm")
-
-    @property
-    def notebooklm_login_browser(self) -> str:
-        return str(self._get("NOTEBOOKLM_LOGIN_BROWSER", "chrome") or "chrome")
-
-    @property
-    def notebooklm_login_browser_profile(self) -> str:
-        return str(self._get("NOTEBOOKLM_LOGIN_BROWSER_PROFILE", "") or "")
-
-    @property
-    def notebooklm_login_account(self) -> str:
-        return str(self._get("NOTEBOOKLM_LOGIN_ACCOUNT", "") or "")
-
-    @property
-    def notebooklm_login_profile_name(self) -> str:
-        return str(self._get("NOTEBOOKLM_LOGIN_PROFILE_NAME", "") or "")
-
-    @property
-    def notebooklm_default_notebook_id(self) -> str:
-        return str(self._get("NOTEBOOKLM_DEFAULT_NOTEBOOK_ID", "") or "")
-
-    @property
-    def store(self) -> Any:
-        return self._get("store")
-
-    @property
     def registry(self) -> Any:
         return self._get("registry")
-
-    @property
-    def taskboard_store(self) -> Any:
-        return self._get("taskboard_store")
-
-    @property
-    def list_skills_impl(self) -> Callable[..., dict[str, object]]:
-        return self._get("list_skills_impl")
 
     @property
     def obsidian_call_native_tool(self) -> Callable[..., Any]:
@@ -162,11 +109,3 @@ class ToolContext:
     @property
     def obsidian_proxy_error(self) -> Callable[..., dict[str, object]]:
         return self._get("obsidian_proxy_error")
-
-    @property
-    def notebooklm_client_factory(self) -> Callable[..., Any]:
-        return self._get("create_notebooklm_client")
-
-    @property
-    def notebooklm_proxy_error(self) -> Callable[..., dict[str, object]]:
-        return self._get("notebooklm_proxy_error")

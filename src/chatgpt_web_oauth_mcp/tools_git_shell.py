@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any, Literal
+
+from pydantic import Field
 
 from .gitops import git_blame as git_blame_impl
 from .gitops import git_commit as git_commit_impl
@@ -9,12 +11,14 @@ from .gitops import git_log as git_log_impl
 from .gitops import git_show as git_show_impl
 from .gitops import git_status as git_status_impl
 from .pathing import resolve_cwd
+from .shell import MAX_COMMAND_BATCH_CONCURRENCY
 from .shell import run_command as run_command_impl
+from .shell import run_commands as run_commands_impl
 from .tool_context import LOCAL_WRITE_TOOL, OPEN_WORLD_WRITE_TOOL, READ_ONLY_TOOL, ToolContext
 
 
 def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
-    """Register git, shell, delegate, and task lifecycle tools."""
+    """Register git, synchronous shell, and serial Codex delegate tools."""
 
     @mcp.tool(
         name="git_status",
@@ -22,7 +26,12 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         annotations=READ_ONLY_TOOL,
         description="Return structured git status for the repository at cwd or the current workspace root.",
     )
-    def git_status(cwd: str | None = None) -> dict[str, object]:
+    def git_status(
+        cwd: Annotated[
+            str | None,
+            Field(description="Repository working directory. Defaults to the session cwd or workspace root."),
+        ] = None
+    ) -> dict[str, object]:
         resolved_cwd = resolve_cwd(cwd, ctx.workspace_root)
         return git_status_impl(cwd=resolved_cwd)
 
@@ -37,11 +46,17 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         ),
     )
     def git_diff(
-        cwd: str | None = None,
-        staged: bool = False,
-        paths: list[str] | None = None,
-        max_bytes: int = 65536,
-        per_file_max_bytes: int = 16384,
+        cwd: Annotated[
+            str | None,
+            Field(description="Repository working directory. Defaults to the session cwd or workspace root."),
+        ] = None,
+        staged: Annotated[bool, Field(description="Show staged diff instead of unstaged working-tree diff.")] = False,
+        paths: Annotated[
+            list[str] | None,
+            Field(description="Optional repository-relative paths to restrict the diff."),
+        ] = None,
+        max_bytes: Annotated[int, Field(description="Maximum total diff bytes to return.")] = 65536,
+        per_file_max_bytes: Annotated[int, Field(description="Maximum diff bytes to return per changed file.")] = 16384,
     ) -> dict[str, object]:
         resolved_cwd = resolve_cwd(cwd, ctx.workspace_root)
         return git_diff_impl(
@@ -63,15 +78,21 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         ),
     )
     def git_commit(
-        message: str,
-        cwd: str | None = None,
-        paths: list[str] | None = None,
-        stage_all: bool = False,
-        amend: bool = False,
-        allow_empty: bool = False,
-        author: str | None = None,
-        sign_off: bool = False,
-        dry_run: bool = False,
+        message: Annotated[str, Field(description="Commit message to use.")],
+        cwd: Annotated[
+            str | None,
+            Field(description="Repository working directory. Defaults to the session cwd or workspace root."),
+        ] = None,
+        paths: Annotated[
+            list[str] | None,
+            Field(description="Optional repository-relative paths to stage before committing."),
+        ] = None,
+        stage_all: Annotated[bool, Field(description="Stage all current repository changes before committing.")] = False,
+        amend: Annotated[bool, Field(description="Amend the current HEAD commit instead of creating a new commit.")] = False,
+        allow_empty: Annotated[bool, Field(description="Allow creating an empty commit when there are no changes.")] = False,
+        author: Annotated[str | None, Field(description="Optional git author string, e.g. 'Name <email>'.")] = None,
+        sign_off: Annotated[bool, Field(description="Append a Signed-off-by trailer to the commit message.")] = False,
+        dry_run: Annotated[bool, Field(description="Preview the commit operation without changing git state.")] = False,
     ) -> dict[str, object]:
         resolved_cwd = resolve_cwd(cwd, ctx.workspace_root)
         return git_commit_impl(
@@ -92,7 +113,13 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         annotations=READ_ONLY_TOOL,
         description="Return recent git commits for the repository at cwd.",
     )
-    def git_log(cwd: str | None = None, limit: int = 10) -> dict[str, object]:
+    def git_log(
+        cwd: Annotated[
+            str | None,
+            Field(description="Repository working directory. Defaults to the session cwd or workspace root."),
+        ] = None,
+        limit: Annotated[int, Field(description="Maximum number of commits to return.")] = 10,
+    ) -> dict[str, object]:
         resolved_cwd = resolve_cwd(cwd, ctx.workspace_root)
         return git_log_impl(cwd=resolved_cwd, limit=limit)
 
@@ -106,10 +133,13 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         ),
     )
     def git_show(
-        ref: str = "HEAD",
-        cwd: str | None = None,
-        max_bytes: int = 65536,
-        per_file_max_bytes: int = 16384,
+        ref: Annotated[str, Field(description="Git revision, commit, tag, branch, or other ref to show.")] = "HEAD",
+        cwd: Annotated[
+            str | None,
+            Field(description="Repository working directory. Defaults to the session cwd or workspace root."),
+        ] = None,
+        max_bytes: Annotated[int, Field(description="Maximum total output bytes to return.")] = 65536,
+        per_file_max_bytes: Annotated[int, Field(description="Maximum diff bytes to return per file.")] = 16384,
     ) -> dict[str, object]:
         resolved_cwd = resolve_cwd(cwd, ctx.workspace_root)
         return git_show_impl(
@@ -129,11 +159,14 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         ),
     )
     def git_blame(
-        path: str,
-        cwd: str | None = None,
-        ref: str | None = None,
-        start_line: int | None = None,
-        end_line: int | None = None,
+        path: Annotated[str, Field(description="Repository-relative file path to blame.")],
+        cwd: Annotated[
+            str | None,
+            Field(description="Repository working directory. Defaults to the session cwd or workspace root."),
+        ] = None,
+        ref: Annotated[str | None, Field(description="Optional git ref to blame instead of the working tree.")] = None,
+        start_line: Annotated[int | None, Field(description="Optional 1-based first line to include.")] = None,
+        end_line: Annotated[int | None, Field(description="Optional 1-based last line to include.")] = None,
     ) -> dict[str, object]:
         resolved_cwd = resolve_cwd(cwd, ctx.workspace_root)
         return git_blame_impl(
@@ -148,132 +181,231 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         name="run_command",
         title="Run Command",
         annotations=OPEN_WORLD_WRITE_TOOL,
-        description="Run a local shell command now or queue it as a background task for wait_task/get_task polling.",
-    )
-    def run_command(
-        command: str,
-        cwd: str | None = None,
-        timeout: int | None = None,
-        run_in_background: bool = False,
-    ) -> dict[str, object]:
-        resolved_cwd = resolve_cwd(cwd, ctx.workspace_root)
-        effective_timeout = timeout if timeout is not None else ctx.command_timeout
-        if run_in_background:
-            return ctx.registry.submit_command(
-                command=command,
-                cwd=resolved_cwd,
-                timeout=effective_timeout,
-            )
-        return run_command_impl(
-            command=command,
-            cwd=resolved_cwd,
-            timeout=effective_timeout,
-        )
-
-    @mcp.tool(
-        name="run_command_stream",
-        title="Run Command Stream",
-        annotations=OPEN_WORLD_WRITE_TOOL,
         description=(
-            "Start a shell command in background and return task_id immediately for "
-            "stream-like polling via get_task/wait_task."
+            "Run one local shell command, or run a batch of commands with mode=sequential "
+            "or mode=parallel. Parallel batches are capped at max_concurrency=3."
         ),
     )
-    def run_command_stream(
-        command: str,
-        cwd: str | None = None,
-        timeout: int | None = None,
+    def run_command(
+        command: Annotated[
+            str | None,
+            Field(description="Single shell command to run. Provide exactly one of command or commands."),
+        ] = None,
+        commands: Annotated[
+            list[str] | None,
+            Field(description="Batch of shell commands to run. Provide exactly one of command or commands."),
+        ] = None,
+        cwd: Annotated[
+            str | None,
+            Field(description="Working directory for the command. Defaults to the session cwd or workspace root."),
+        ] = None,
+        timeout: Annotated[
+            int | None,
+            Field(description="Maximum runtime in seconds for each command before it is killed."),
+        ] = None,
+        mode: Annotated[
+            Literal["sequential", "parallel"],
+            Field(description="Batch execution mode when commands is provided."),
+        ] = "sequential",
+        max_concurrency: Annotated[
+            int,
+            Field(
+                description=(
+                    "Maximum number of commands to run concurrently in parallel mode. "
+                    f"Hard limit: {MAX_COMMAND_BATCH_CONCURRENCY}."
+                ),
+                ge=1,
+                le=MAX_COMMAND_BATCH_CONCURRENCY,
+            ),
+        ] = MAX_COMMAND_BATCH_CONCURRENCY,
     ) -> dict[str, object]:
+        has_command = bool(command)
+        has_commands = bool(commands)
+        if has_command == has_commands:
+            return {
+                "success": False,
+                "error": {
+                    "code": "invalid_arguments",
+                    "message": "Provide exactly one of command or commands.",
+                },
+            }
+
         resolved_cwd = resolve_cwd(cwd, ctx.workspace_root)
         effective_timeout = timeout if timeout is not None else ctx.command_timeout
-        queued = ctx.registry.submit_command(
-            command=command,
+        if commands is not None:
+            return run_commands_impl(
+                commands=commands,
+                cwd=resolved_cwd,
+                timeout=effective_timeout,
+                mode=mode,
+                max_concurrency=max_concurrency,
+            )
+        return run_command_impl(
+            command=command or "",
             cwd=resolved_cwd,
             timeout=effective_timeout,
         )
-        queued["stream_mode"] = "task-polling"
-        queued["next"] = "call get_task(task_id) or wait_task(task_id)"
-        return queued
 
     @mcp.tool(
         name="delegate_task",
         title="Delegate Task",
         annotations=OPEN_WORLD_WRITE_TOOL,
         description=(
-            "Fallback only. Use this when direct tools are insufficient for a complex, long-running, or "
-            "multi-file task. Supported executors: auto, codex, claude-code. "
-            "Optionally provide output_schema and parse_structured_output=true to "
-            "capture JSON output as structured_output."
+            "Fallback executor only. Run exactly one bounded Codex Execution Prompt, serialized "
+            "behind any other active Codex delegate call. ChatGPT Web should act as the "
+            "architect/manager: inspect, plan, and review with direct MCP tools, then call this "
+            "only for a small local execution slice. Blocks for up to wait_seconds (default 180) "
+            "and returns status=running when Codex is still working, so callers can invoke this "
+            "tool again to continue waiting. Each run writes private audit logs under the system "
+            "temporary cache directory and returns their paths in logs. "
+            "Optionally provide output_schema and parse_structured_output=true to capture JSON output."
         ),
     )
     def delegate_task(
-        task: str | None = None,
-        goal: str | None = None,
-        executor: str = "auto",
-        cwd: str | None = None,
-        context_files: list[str] | None = None,
-        acceptance_criteria: list[str] | None = None,
-        verification_commands: list[str] | None = None,
-        commit_mode: str = "allowed",
-        timeout: int | None = None,
-        output_schema: dict[str, object] | None = None,
-        parse_structured_output: bool = True,
+        task: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Concrete work instruction for Codex. Required when starting a new delegate "
+                    "unless goal is provided. Omit task and goal on a later call to continue "
+                    "waiting for the currently running delegate."
+                )
+            ),
+        ] = None,
+        goal: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "High-level objective or context for this one Codex execution slice. Required "
+                    "when starting a new delegate unless task is provided. Can be combined with task."
+                )
+            ),
+        ] = None,
+        task_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Optional caller-defined id for this single execution slice, e.g. T3 or "
+                    "audit-step4-label-alignment. Used only in the Codex prompt and result context."
+                )
+            ),
+        ] = None,
+        cwd: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Working directory for the Codex delegate. Relative paths resolve from the "
+                    "server default cwd; absolute paths are used as-is."
+                )
+            ),
+        ] = None,
+        files_in_scope: Annotated[
+            list[str] | None,
+            Field(
+                description=(
+                    "Optional paths Codex is allowed or expected to inspect/change for this single "
+                    "execution slice. Keep this narrow to avoid opaque long-running analysis."
+                )
+            ),
+        ] = None,
+        out_of_scope: Annotated[
+            list[str] | None,
+            Field(
+                description=(
+                    "Optional paths, actions, or topics Codex must avoid while executing this slice."
+                )
+            ),
+        ] = None,
+        context_files: Annotated[
+            list[str] | None,
+            Field(
+                description=(
+                    "Optional file paths to mention in the Codex prompt as relevant context. "
+                    "The server does not read or attach them automatically."
+                )
+            ),
+        ] = None,
+        acceptance_criteria: Annotated[
+            list[str] | None,
+            Field(description="Optional checklist of conditions Codex should satisfy before finishing."),
+        ] = None,
+        done_means: Annotated[
+            list[str] | None,
+            Field(
+                description=(
+                    "Optional explicit completion contract for this slice, such as changed files, "
+                    "expected report sections, or verification evidence required before returning."
+                )
+            ),
+        ] = None,
+        verification_commands: Annotated[
+            list[str] | None,
+            Field(description="Optional shell commands Codex should consider running to verify the work."),
+        ] = None,
+        commit_mode: Annotated[
+            Literal["allowed", "required", "forbidden"],
+            Field(
+                description=(
+                    "Whether Codex may create commits: allowed permits commits, required asks Codex "
+                    "to commit if it changes files, forbidden tells Codex not to commit."
+                )
+            ),
+        ] = "allowed",
+        timeout: Annotated[
+            int | None,
+            Field(
+                description=(
+                    "Maximum total runtime in seconds for the Codex subprocess before it is killed. "
+                    "Defaults to CHATGPT_MCP_DELEGATE_TIMEOUT."
+                )
+            ),
+        ] = None,
+        wait_seconds: Annotated[
+            float,
+            Field(
+                description=(
+                    "Maximum seconds this MCP call should block waiting for Codex. Default 180. "
+                    "If Codex is still running after this wait, the tool returns status=running; "
+                    "call delegate_task again to continue waiting."
+                )
+            ),
+        ] = 180,
+        output_schema: Annotated[
+            dict[str, object] | None,
+            Field(
+                description=(
+                    "Optional JSON schema describing the structured result expected from Codex. "
+                    "Returned in output_schema and used only as prompt/context metadata."
+                )
+            ),
+        ] = None,
+        parse_structured_output: Annotated[
+            bool,
+            Field(
+                description=(
+                    "When true, the server tries to parse JSON from Codex stdout/stderr and returns "
+                    "it as structured_output."
+                )
+            ),
+        ] = True,
     ) -> dict[str, object]:
         resolved_cwd = resolve_cwd(cwd, ctx.workspace_root)
-        return ctx.registry.submit(
+        return ctx.registry.run_codex(
             task=task,
             goal=goal,
-            executor=executor,
+            task_id=task_id,
             cwd=resolved_cwd,
             timeout=timeout if timeout is not None else ctx.delegate_timeout,
+            wait_seconds=wait_seconds,
+            files_in_scope=files_in_scope,
+            out_of_scope=out_of_scope,
             context_files=context_files,
             acceptance_criteria=acceptance_criteria,
+            done_means=done_means,
             verification_commands=verification_commands,
             commit_mode=commit_mode,
             output_schema=output_schema,
             parse_structured_output=parse_structured_output,
-        )
-
-    @mcp.tool(
-        name="get_task",
-        title="Get Task",
-        annotations=READ_ONLY_TOOL,
-        description="Get the current status and output tail for a delegated or background shell task.",
-    )
-    def get_task(task_id: str) -> dict[str, object]:
-        return ctx.registry.get(task_id)
-
-    @mcp.tool(
-        name="wait_task",
-        title="Wait Task",
-        annotations=READ_ONLY_TOOL,
-        description="Wait for a delegated or background shell task to finish or until timeout, then return its latest status and output tail.",
-    )
-    def wait_task(task_id: str, timeout: float = 30, poll_interval: float = 0.5) -> dict[str, object]:
-        return ctx.registry.wait(task_id, timeout=timeout, poll_interval=poll_interval)
-
-    @mcp.tool(
-        name="cancel_task",
-        title="Cancel Task",
-        annotations=LOCAL_WRITE_TOOL,
-        description="Cancel a delegated or background shell task if it is still running.",
-    )
-    def cancel_task(task_id: str) -> dict[str, object]:
-        return ctx.registry.cancel(task_id)
-
-    @mcp.tool(
-        name="purge_tasks",
-        title="Purge Tasks",
-        annotations=LOCAL_WRITE_TOOL,
-        description=(
-            "Delete old task metadata/log directories under STATE_DIR/tasks. "
-            "Defaults to 7 days; supports dry_run preview."
-        ),
-    )
-    def purge_tasks(older_than_hours: float = 24 * 7, dry_run: bool = False) -> dict[str, object]:
-        return ctx.store.purge_tasks(
-            older_than_seconds=max(float(older_than_hours), 0.0) * 3600.0,
-            dry_run=dry_run,
         )
 
     return {
@@ -284,10 +416,5 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         "git_show": git_show,
         "git_blame": git_blame,
         "run_command": run_command,
-        "run_command_stream": run_command_stream,
         "delegate_task": delegate_task,
-        "get_task": get_task,
-        "wait_task": wait_task,
-        "cancel_task": cancel_task,
-        "purge_tasks": purge_tasks,
     }

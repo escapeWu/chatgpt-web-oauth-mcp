@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import contextlib
+import shlex
 import socket
+import sys
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -14,7 +16,10 @@ from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 from chatgpt_web_oauth_mcp.executors import ExecutorRegistry
-from chatgpt_web_oauth_mcp.tasks import TaskStore
+
+
+def _python_cmd(code: str) -> str:
+    return f"{shlex.quote(sys.executable)} -c {shlex.quote(code)}"
 
 
 def _find_free_port() -> int:
@@ -29,20 +34,13 @@ def _running_server(
     monkeypatch,
     *,
     auth_token: str,
-    codex_command: str = "python -c \"print('codex')\"",
-    claude_command: str = "python -c \"print('claude')\"",
+    codex_command: str | None = None,
 ):
     from chatgpt_web_oauth_mcp import server
 
     monkeypatch.setattr(server, "AUTH_TOKEN", auth_token)
     monkeypatch.setattr(server, "WORKSPACE_ROOT", tmp_path)
-    store = TaskStore(tmp_path / "state")
-    registry = ExecutorRegistry(
-        store=store,
-        codex_command=codex_command,
-        claude_command=claude_command,
-    )
-    monkeypatch.setattr(server, "store", store)
+    registry = ExecutorRegistry(codex_command=codex_command or _python_cmd("print('codex')"))
     monkeypatch.setattr(server, "registry", registry)
 
     app = server.build_http_app()
@@ -94,73 +92,83 @@ async def _call_tool(session: ClientSession, name: str, arguments: dict[str, obj
     return result.structuredContent
 
 
-def test_mcp_run_command_stream_end_to_end(tmp_path: Path, monkeypatch) -> None:
+def test_mcp_run_command_end_to_end(tmp_path: Path, monkeypatch) -> None:
     token = "secret-token"
     with _running_server(tmp_path, monkeypatch, auth_token=token) as url:
 
         async def scenario() -> None:
             async with _mcp_session(url, token=token) as session:
-                queued = await _call_tool(
-                    session,
-                    "run_command_stream",
-                    {
-                        "command": "python -c \"print('stream-ok')\"",
-                        "timeout": 5,
-                    },
-                )
                 result = await _call_tool(
                     session,
-                    "wait_task",
+                    "run_command",
                     {
-                        "task_id": queued["task_id"],
+                        "command": _python_cmd("print('shell-ok')"),
                         "timeout": 5,
-                        "poll_interval": 0.05,
                     },
                 )
-                assert queued["stream_mode"] == "task-polling"
-                assert result["status"] == "succeeded"
-                assert "stream-ok" in result["stdout_tail"]
+                assert result["success"] is True
+                assert "shell-ok" in result["stdout"]
 
         anyio.run(scenario)
 
 
-def test_mcp_run_command_stream_timeout_end_to_end(tmp_path: Path, monkeypatch) -> None:
+def test_mcp_run_command_batch_end_to_end(tmp_path: Path, monkeypatch) -> None:
     token = "secret-token"
     with _running_server(tmp_path, monkeypatch, auth_token=token) as url:
 
         async def scenario() -> None:
             async with _mcp_session(url, token=token) as session:
-                queued = await _call_tool(
-                    session,
-                    "run_command_stream",
-                    {
-                        "command": "python -c \"import time; time.sleep(2)\"",
-                        "timeout": 1,
-                    },
-                )
                 result = await _call_tool(
                     session,
-                    "wait_task",
+                    "run_command",
                     {
-                        "task_id": queued["task_id"],
+                        "commands": [
+                            _python_cmd("print('batch-one')"),
+                            _python_cmd("print('batch-two')"),
+                        ],
+                        "mode": "parallel",
+                        "max_concurrency": 2,
                         "timeout": 5,
-                        "poll_interval": 0.05,
                     },
                 )
-                final_meta = await _call_tool(
-                    session,
+                assert result["success"] is True
+                assert result["mode"] == "batch"
+                assert result["execution_mode"] == "parallel"
+                assert [item["stdout"].strip() for item in result["results"]] == [
+                    "batch-one",
+                    "batch-two",
+                ]
+
+        anyio.run(scenario)
+
+
+def test_mcp_removed_task_tools_are_not_exposed(tmp_path: Path, monkeypatch) -> None:
+    token = "secret-token"
+    with _running_server(tmp_path, monkeypatch, auth_token=token) as url:
+
+        async def scenario() -> None:
+            async with _mcp_session(url, token=token) as session:
+                tools = await session.list_tools()
+                names = {tool.name for tool in tools.tools}
+                assert "delegate_task" in names
+                assert "run_command" in names
+                for removed in {
+                    "run_command_stream",
+                    "wait_task",
                     "get_task",
-                    {"task_id": queued["task_id"]},
-                )
-                assert result["status"] == "failed"
-                assert final_meta.get("timed_out") is True
+                    "cancel_task",
+                    "purge_tasks",
+                    "taskboard_create",
+                    "list_skills",
+                }:
+                    assert removed not in names
 
         anyio.run(scenario)
 
 
 def test_mcp_delegate_task_structured_output_end_to_end(tmp_path: Path, monkeypatch) -> None:
     token = "secret-token"
-    codex_command = "python -c \"print('{\\\"ok\\\": true, \\\"source\\\": \\\"delegate\\\"}')\""
+    codex_command = _python_cmd("print('{\"ok\": true, \"source\": \"delegate\"}')")
     with _running_server(
         tmp_path,
         monkeypatch,
@@ -170,26 +178,17 @@ def test_mcp_delegate_task_structured_output_end_to_end(tmp_path: Path, monkeypa
 
         async def scenario() -> None:
             async with _mcp_session(url, token=token) as session:
-                queued = await _call_tool(
+                result = await _call_tool(
                     session,
                     "delegate_task",
                     {
                         "task": "emit json",
-                        "executor": "codex",
                         "output_schema": {"type": "object"},
                         "parse_structured_output": True,
                     },
                 )
-                result = await _call_tool(
-                    session,
-                    "wait_task",
-                    {
-                        "task_id": queued["task_id"],
-                        "timeout": 5,
-                        "poll_interval": 0.05,
-                    },
-                )
                 assert result["status"] == "succeeded"
+                assert result["serial"] is True
                 assert result["structured_output"] == {"ok": True, "source": "delegate"}
 
         anyio.run(scenario)
@@ -232,6 +231,19 @@ def test_mcp_canonical_search_and_read_text_end_to_end(tmp_path: Path, monkeypat
                         "query": "TODO",
                     },
                 )
+                batch_search = await _call_tool(
+                    session,
+                    "search",
+                    {
+                        "mode": "parallel",
+                        "path": ".",
+                        "queries": [
+                            {"mode": "glob", "pattern": "*.py"},
+                            {"mode": "text", "path": "demo.py", "query": "alpha"},
+                        ],
+                        "max_concurrency": 2,
+                    },
+                )
                 assert found["success"] is True
                 assert found["mode"] == "glob"
                 assert any(item["path"].endswith("demo.py") for item in found["matches"])
@@ -243,5 +255,11 @@ def test_mcp_canonical_search_and_read_text_end_to_end(tmp_path: Path, monkeypat
                 assert single_file_search["mode"] == "text"
                 assert len(single_file_search["matches"]) == 1
                 assert single_file_search["matches"][0]["path"].endswith("demo.py")
+                assert batch_search["success"] is True
+                assert batch_search["mode"] == "batch"
+                assert batch_search["execution_mode"] == "parallel"
+                assert batch_search["max_concurrency"] == 2
+                assert batch_search["results"][0]["mode"] == "glob"
+                assert batch_search["results"][1]["mode"] == "text"
 
         anyio.run(scenario)

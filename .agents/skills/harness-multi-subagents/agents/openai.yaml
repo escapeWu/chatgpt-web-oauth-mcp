@@ -1,5 +1,0 @@
-interface:
-  display_name: Harness Multi-Subagents
-  short_description: Coordinate local TaskBoard-based multi-subagent engineering work.
-  icon: 🧭
-  accent_color: "#4f46e5"
