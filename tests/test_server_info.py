@@ -23,9 +23,13 @@ def test_server_info_reports_metadata_and_tools() -> None:
         "executor": "codex",
         "serial": True,
         "background_tasks": False,
-        "default_wait_seconds": 180,
+        "default_wait_seconds": 300,
         "continuation": "call delegate_task again when status is running",
         "audit_logs": "system temp / chatgpt-web-oauth-mcp / codex-delegates",
+        "log_progress": "use read_text on returned stdout/stderr/metadata paths",
+        "raw_output": "stdout/stderr are stored in logs and not inlined in completed responses",
+        "status_recovery": "use delegate_status to list active/recent server-generated delegate_id values",
+        "status_monitor": "delegate_status supports watch_seconds up to 300 and polls every 5s by default",
     }
     assert payload["routing_contract"]["chatgpt_web_role"] == "architect_manager_reviewer"
     assert payload["routing_contract"]["codex_delegate_role"] == "single_bounded_execution_slice"
@@ -42,6 +46,7 @@ def test_server_info_reports_metadata_and_tools() -> None:
         "git_show",
         "git_blame",
         "delegate_task",
+        "delegate_status",
     ]:
         assert name in tools, f"expected {name} in tools list"
     for name in [

@@ -76,7 +76,7 @@ class ToolContext:
 
     @property
     def delegate_timeout(self) -> int:
-        return int(self._get("DELEGATE_TIMEOUT", 1800))
+        return int(self._get("DELEGATE_TIMEOUT", 300))
 
     @property
     def debug_mcp_logging(self) -> bool:

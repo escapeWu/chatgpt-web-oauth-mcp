@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -10,6 +11,7 @@ import tempfile
 import threading
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from pathlib import PureWindowsPath
@@ -18,8 +20,11 @@ from pathlib import PureWindowsPath
 ALLOWED_COMMIT_MODES = {"allowed", "required", "forbidden"}
 IS_WINDOWS = os.name == "nt"
 TIMEOUT_EXIT_CODE = -1
-DEFAULT_DELEGATE_WAIT_SECONDS = 180.0
+DEFAULT_DELEGATE_WAIT_SECONDS = 300.0
 DELEGATE_STALL_HINT_SECONDS = 180.0
+DEFAULT_DELEGATE_HISTORY_LIMIT = 20
+DEFAULT_DELEGATE_STATUS_POLL_SECONDS = 5.0
+MAX_DELEGATE_STATUS_WATCH_SECONDS = 300.0
 
 
 def _split_command(command: str) -> list[str]:
@@ -64,11 +69,12 @@ def _command_available(command: str | None) -> bool:
     return shutil.which(binary) is not None
 
 
-def _summarize(stdout: str, stderr: str) -> str:
-    for candidate in (stdout.strip(), stderr.strip()):
-        if candidate:
-            return candidate.splitlines()[-1]
-    return ""
+def _result_summary(status: str, error: dict[str, object] | None) -> str:
+    if error and error.get("message"):
+        return f"Codex delegate {status}: {error['message']}"
+    if status == "succeeded":
+        return "Codex delegate succeeded. Process output is stored in logs."
+    return "Codex delegate failed. Process output is stored in logs."
 
 
 _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
@@ -115,6 +121,45 @@ def _write_private_json(path: Path, payload: dict[str, object]) -> None:
     _write_private_text(path, json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
 
 
+def _format_epoch_seconds(value: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(value))
+
+
+def _status_entry_signature(entry: dict[str, object] | None) -> tuple[object, ...]:
+    if not entry:
+        return ("none",)
+    return (
+        entry.get("delegate_id"),
+        entry.get("status"),
+        entry.get("completed"),
+        entry.get("in_progress"),
+        entry.get("exit_code"),
+        entry.get("timed_out"),
+        entry.get("soft_timeout_elapsed"),
+        entry.get("activity_state"),
+    )
+
+
+def _status_response_signature(payload: dict[str, object]) -> tuple[object, ...]:
+    if payload.get("delegate"):
+        return ("delegate", *_status_entry_signature(payload.get("delegate")))  # type: ignore[arg-type]
+    latest = payload.get("active") or payload.get("latest")
+    return ("list", *_status_entry_signature(latest if isinstance(latest, dict) else None))
+
+
+def _status_focus_entry(payload: dict[str, object]) -> dict[str, object] | None:
+    delegate = payload.get("delegate")
+    if isinstance(delegate, dict):
+        return delegate
+    active = payload.get("active")
+    if isinstance(active, dict):
+        return active
+    latest = payload.get("latest")
+    if isinstance(latest, dict):
+        return latest
+    return None
+
+
 @dataclass(frozen=True)
 class DelegateLogPaths:
     log_dir: Path
@@ -131,6 +176,18 @@ class DelegateLogPaths:
             "stderr": str(self.stderr),
             "metadata": str(self.metadata),
         }
+
+
+def _log_read_hint(log_paths: DelegateLogPaths) -> dict[str, object]:
+    return {
+        "tool": "read_text",
+        "paths": [
+            str(log_paths.stdout),
+            str(log_paths.stderr),
+            str(log_paths.metadata),
+        ],
+        "message": "Use read_text on stdout/stderr/metadata to inspect live delegate progress.",
+    }
 
 
 def _create_delegate_logs(delegate_id: str) -> DelegateLogPaths:
@@ -159,8 +216,6 @@ def _cwd_error(cwd: Path) -> dict[str, object] | None:
             "cwd": str(cwd),
             "executor": "codex",
             "exit_code": TIMEOUT_EXIT_CODE,
-            "stdout": "",
-            "stderr": "",
             "summary": "",
             "timed_out": False,
             "serial": True,
@@ -176,13 +231,77 @@ def _cwd_error(cwd: Path) -> dict[str, object] | None:
             "cwd": str(cwd),
             "executor": "codex",
             "exit_code": TIMEOUT_EXIT_CODE,
-            "stdout": "",
-            "stderr": "",
             "summary": "",
             "timed_out": False,
             "serial": True,
         }
     return None
+
+
+def _delegate_request_fingerprint(
+    *,
+    task: str | None,
+    goal: str | None,
+    task_id: str | None,
+    cwd: Path,
+    files_in_scope: list[str] | None,
+    out_of_scope: list[str] | None,
+    context_files: list[str] | None,
+    acceptance_criteria: list[str] | None,
+    done_means: list[str] | None,
+    verification_commands: list[str] | None,
+    commit_mode: str,
+    output_schema: dict[str, object] | None,
+    parse_structured_output: bool,
+) -> str:
+    payload = {
+        "task": task or "",
+        "goal": goal or "",
+        "task_id": task_id or "",
+        "cwd": str(cwd),
+        "files_in_scope": files_in_scope or [],
+        "out_of_scope": out_of_scope or [],
+        "context_files": context_files or [],
+        "acceptance_criteria": acceptance_criteria or [],
+        "done_means": done_means or [],
+        "verification_commands": verification_commands or [],
+        "commit_mode": commit_mode,
+        "output_schema": output_schema or None,
+        "parse_structured_output": parse_structured_output,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:16]
+
+
+def _delegate_argument_error(
+    *,
+    cwd: Path,
+    timeout: int,
+    code: str,
+    message: str,
+    details: dict[str, object] | None = None,
+) -> dict[str, object]:
+    error: dict[str, object] = {
+        "code": code,
+        "message": message,
+    }
+    if details:
+        error.update(details)
+    return {
+        "success": False,
+        "status": "failed",
+        "completed": True,
+        "in_progress": False,
+        "error": error,
+        "cwd": str(cwd),
+        "executor": "codex",
+        "exit_code": TIMEOUT_EXIT_CODE,
+        "summary": message,
+        "timed_out": False,
+        "wait_timed_out": False,
+        "timeout": timeout,
+        "serial": True,
+    }
 
 
 @dataclass(frozen=True)
@@ -203,6 +322,9 @@ class ActiveDelegate:
     started_at: float
     log_paths: DelegateLogPaths
     lock_wait_seconds: float = 0.0
+    request_fingerprint: str | None = None
+    request_task_id: str | None = None
+    started_at_epoch: float = field(default_factory=time.time)
     result: dict[str, object] | None = None
     output_lock: threading.Lock = field(default_factory=threading.Lock)
     stdout_chunks: list[bytes] = field(default_factory=list)
@@ -219,6 +341,7 @@ class ExecutorRegistry:
         self.codex_command = codex_command
         self._lock = threading.Lock()
         self._active: ActiveDelegate | None = None
+        self._history: deque[dict[str, object]] = deque(maxlen=DEFAULT_DELEGATE_HISTORY_LIMIT)
 
     def run_codex(
         self,
@@ -241,18 +364,66 @@ class ExecutorRegistry:
     ) -> dict[str, object]:
         normalized_task = (task or "").strip()
         normalized_goal = (goal or "").strip()
+        normalized_task_id = (task_id or "").strip() or None
+        request_fingerprint = None
+        if normalized_task or normalized_goal:
+            request_fingerprint = _delegate_request_fingerprint(
+                task=normalized_task or None,
+                goal=normalized_goal or None,
+                task_id=normalized_task_id,
+                cwd=cwd,
+                files_in_scope=files_in_scope,
+                out_of_scope=out_of_scope,
+                context_files=context_files,
+                acceptance_criteria=acceptance_criteria,
+                done_means=done_means,
+                verification_commands=verification_commands,
+                commit_mode=commit_mode,
+                output_schema=output_schema,
+                parse_structured_output=parse_structured_output,
+            )
         active = self._current_active()
         if active is not None:
-            return self._wait_for_active(
-                active,
-                wait_seconds=wait_seconds,
-                attached=True,
+            if active.result is not None:
+                if request_fingerprint is None or active.request_fingerprint == request_fingerprint:
+                    self._remember_delegate_result(active)
+                    self._clear_active(active)
+                    return active.result
+                self._remember_delegate_result(active)
+                self._clear_active(active)
+            elif request_fingerprint is not None and active.request_fingerprint != request_fingerprint:
+                return self._running_result(
+                    active,
+                    wait_seconds=0.0,
+                    attached=True,
+                    request_conflict=True,
+                    requested_task_id=normalized_task_id,
+                )
+            else:
+                return self._wait_for_active(
+                    active,
+                    wait_seconds=wait_seconds,
+                    attached=True,
+                )
+
+        if request_fingerprint is None:
+            # A completed active delegate may have been cleared above; without a new
+            # task/goal there is now nothing to continue waiting on.
+            return _delegate_argument_error(
+                cwd=cwd,
+                timeout=timeout,
+                code="missing_task_or_goal",
+                message="delegate_task requires task or goal when no delegate is already running.",
             )
 
-        if not normalized_task and not normalized_goal:
-            raise ValueError("delegate_task requires task or goal.")
         if commit_mode not in ALLOWED_COMMIT_MODES:
-            raise ValueError(f"Unsupported commit_mode: {commit_mode}")
+            return _delegate_argument_error(
+                cwd=cwd,
+                timeout=timeout,
+                code="unsupported_commit_mode",
+                message=f"Unsupported commit_mode: {commit_mode}",
+                details={"allowed_commit_modes": sorted(ALLOWED_COMMIT_MODES)},
+            )
 
         cwd_error = _cwd_error(cwd)
         if cwd_error:
@@ -268,8 +439,6 @@ class ExecutorRegistry:
                 "executor": "codex",
                 "cwd": str(cwd),
                 "exit_code": TIMEOUT_EXIT_CODE,
-                "stdout": "",
-                "stderr": "",
                 "summary": "",
                 "timed_out": False,
                 "serial": True,
@@ -281,7 +450,8 @@ class ExecutorRegistry:
         active = self._start_codex_delegate(
             task=normalized_task or None,
             goal=normalized_goal or None,
-            task_id=(task_id or "").strip() or None,
+            task_id=normalized_task_id,
+            request_fingerprint=request_fingerprint,
             cwd=cwd,
             timeout=timeout,
             files_in_scope=files_in_scope or [],
@@ -295,7 +465,36 @@ class ExecutorRegistry:
             parse_structured_output=parse_structured_output,
             lock_wait_seconds=lock_wait_seconds,
         )
+        if active.request_fingerprint != request_fingerprint:
+            if active.result is not None:
+                self._remember_delegate_result(active)
+                self._clear_active(active)
+                return self.run_codex(
+                    task=task,
+                    goal=goal,
+                    task_id=task_id,
+                    cwd=cwd,
+                    timeout=timeout,
+                    wait_seconds=wait_seconds,
+                    files_in_scope=files_in_scope,
+                    out_of_scope=out_of_scope,
+                    context_files=context_files,
+                    acceptance_criteria=acceptance_criteria,
+                    done_means=done_means,
+                    verification_commands=verification_commands,
+                    commit_mode=commit_mode,
+                    output_schema=output_schema,
+                    parse_structured_output=parse_structured_output,
+                )
+            return self._running_result(
+                active,
+                wait_seconds=0.0,
+                attached=True,
+                request_conflict=True,
+                requested_task_id=normalized_task_id,
+            )
         if active.result is not None:
+            self._remember_delegate_result(active)
             self._clear_active(active)
             return active.result
         return self._wait_for_active(
@@ -313,6 +512,199 @@ class ExecutorRegistry:
             if self._active is active:
                 self._active = None
 
+    def _delegate_snapshot(
+        self,
+        active: ActiveDelegate,
+        *,
+        result: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        with active.output_lock:
+            stdout_bytes = active.stdout_bytes
+            stderr_bytes = active.stderr_bytes
+            last_output_seconds_ago = self._last_output_seconds_ago(active)
+        status = str(result.get("status")) if result else "running"
+        payload: dict[str, object] = {
+            "success": bool(result.get("success")) if result else True,
+            "status": status,
+            "completed": bool(result.get("completed")) if result else False,
+            "in_progress": bool(result.get("in_progress")) if result else True,
+            "executor": "codex",
+            "cwd": str(active.cwd),
+            "delegate_id": active.delegate_id,
+            "task_id": active.request_task_id,
+            "request_fingerprint": active.request_fingerprint,
+            "serial": True,
+            "started_at": _format_epoch_seconds(active.started_at_epoch),
+            "started_at_epoch": active.started_at_epoch,
+            "elapsed_seconds": round(time.monotonic() - active.started_at, 3),
+            "timeout": active.timeout,
+            "stdout_bytes": stdout_bytes,
+            "stderr_bytes": stderr_bytes,
+            "last_output_seconds_ago": last_output_seconds_ago,
+            "logs": active.log_paths.as_payload(),
+            "log_read_hint": _log_read_hint(active.log_paths),
+            "output_omitted": True,
+        }
+        if result:
+            for key in [
+                "exit_code",
+                "summary",
+                "timed_out",
+                "wait_timed_out",
+                "lock_wait_seconds",
+                "duration_seconds",
+                "soft_timeout_elapsed",
+                "structured_output",
+                "output_schema",
+                "error",
+            ]:
+                if key in result:
+                    payload[key] = result[key]
+        else:
+            payload.update(
+                {
+                    "pid": getattr(active.process, "pid", None),
+                    "activity_state": self._activity_state(active, last_output_seconds_ago),
+                    "timed_out": False,
+                    "wait_timed_out": False,
+                    "soft_timeout_elapsed": (time.monotonic() - active.started_at) >= active.timeout,
+                }
+            )
+        return payload
+
+    def _remember_delegate_result(self, active: ActiveDelegate) -> None:
+        if active.result is None:
+            return
+        snapshot = self._delegate_snapshot(active, result=active.result)
+        with self._lock:
+            maxlen = self._history.maxlen or DEFAULT_DELEGATE_HISTORY_LIMIT
+            self._history = deque(
+                (
+                    item
+                    for item in self._history
+                    if item.get("delegate_id") != active.delegate_id
+                ),
+                maxlen=maxlen,
+            )
+            self._history.append(snapshot)
+
+    def _delegate_status_once(self, *, delegate_id: str | None, limit: int) -> dict[str, object]:
+        limit = max(1, min(int(limit), DEFAULT_DELEGATE_HISTORY_LIMIT))
+        with self._lock:
+            active = self._active
+            history = list(self._history)
+        active_snapshot = None
+        if active is not None:
+            active_snapshot = self._delegate_snapshot(active, result=active.result)
+
+        if delegate_id:
+            normalized_delegate_id = delegate_id.strip()
+            if active_snapshot and active_snapshot.get("delegate_id") == normalized_delegate_id:
+                return {"success": True, "delegate": active_snapshot}
+            for item in reversed(history):
+                if item.get("delegate_id") == normalized_delegate_id:
+                    return {"success": True, "delegate": item}
+            return {
+                "success": False,
+                "error": {
+                    "code": "delegate_not_found",
+                    "message": f"Delegate not found: {normalized_delegate_id}",
+                },
+                "active": active_snapshot if active_snapshot and active_snapshot.get("in_progress") else None,
+                "recent": list(reversed(history))[:limit],
+            }
+
+        recent: list[dict[str, object]] = []
+        seen: set[str] = set()
+        if active_snapshot is not None:
+            recent.append(active_snapshot)
+            seen.add(str(active_snapshot.get("delegate_id")))
+        for item in reversed(history):
+            item_id = str(item.get("delegate_id"))
+            if item_id in seen:
+                continue
+            recent.append(item)
+            seen.add(item_id)
+            if len(recent) >= limit:
+                break
+        active_running = active_snapshot if active_snapshot and active_snapshot.get("in_progress") else None
+        return {
+            "success": True,
+            "active": active_running,
+            "latest": recent[0] if recent else None,
+            "recent": recent,
+            "history_limit": DEFAULT_DELEGATE_HISTORY_LIMIT,
+        }
+
+    def delegate_status(
+        self,
+        *,
+        delegate_id: str | None = None,
+        limit: int = 10,
+        watch_seconds: float = 0.0,
+        poll_seconds: float = DEFAULT_DELEGATE_STATUS_POLL_SECONDS,
+    ) -> dict[str, object]:
+        watch_seconds = max(0.0, min(float(watch_seconds), MAX_DELEGATE_STATUS_WATCH_SECONDS))
+        poll_seconds = max(0.1, min(float(poll_seconds), 60.0))
+        initial = self._delegate_status_once(delegate_id=delegate_id, limit=limit)
+        if watch_seconds <= 0:
+            return initial
+
+        started_at = time.monotonic()
+        if initial.get("success") is False:
+            initial["watch"] = {
+                "enabled": True,
+                "status_changed": False,
+                "timed_out": False,
+                "error_returned": True,
+                "watch_seconds": watch_seconds,
+                "poll_seconds": poll_seconds,
+                "elapsed_seconds": round(time.monotonic() - started_at, 3),
+            }
+            return initial
+
+        initial_focus = _status_focus_entry(initial)
+        if initial_focus and initial_focus.get("completed"):
+            initial["watch"] = {
+                "enabled": True,
+                "status_changed": False,
+                "timed_out": False,
+                "already_terminal": True,
+                "watch_seconds": watch_seconds,
+                "poll_seconds": poll_seconds,
+                "elapsed_seconds": round(time.monotonic() - started_at, 3),
+            }
+            return initial
+
+        deadline = started_at + watch_seconds
+        initial_signature = _status_response_signature(initial)
+        current = initial
+        while time.monotonic() < deadline:
+            sleep_for = min(poll_seconds, max(0.0, deadline - time.monotonic()))
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+            current = self._delegate_status_once(delegate_id=delegate_id, limit=limit)
+            if _status_response_signature(current) != initial_signature:
+                current["watch"] = {
+                    "enabled": True,
+                    "status_changed": True,
+                    "timed_out": False,
+                    "watch_seconds": watch_seconds,
+                    "poll_seconds": poll_seconds,
+                    "elapsed_seconds": round(time.monotonic() - started_at, 3),
+                }
+                return current
+
+        current["watch"] = {
+            "enabled": True,
+            "status_changed": False,
+            "timed_out": True,
+            "watch_seconds": watch_seconds,
+            "poll_seconds": poll_seconds,
+            "elapsed_seconds": round(time.monotonic() - started_at, 3),
+        }
+        return current
+
     def _wait_for_active(
         self,
         active: ActiveDelegate,
@@ -320,9 +712,10 @@ class ExecutorRegistry:
         wait_seconds: float,
         attached: bool,
     ) -> dict[str, object]:
-        wait_seconds = max(float(wait_seconds), 0.0)
+        wait_seconds = min(max(float(wait_seconds), 0.0), max(float(active.timeout), 0.0))
         active.completed_event.wait(timeout=wait_seconds)
         if active.result is not None:
+            self._remember_delegate_result(active)
             self._clear_active(active)
             return active.result
         return self._running_result(
@@ -337,6 +730,7 @@ class ExecutorRegistry:
         task: str | None,
         goal: str | None,
         task_id: str | None,
+        request_fingerprint: str,
         cwd: Path,
         timeout: int,
         files_in_scope: list[str],
@@ -353,11 +747,18 @@ class ExecutorRegistry:
         try:
             with self._lock:
                 if self._active is not None:
-                    return self._active
+                    if (
+                        self._active.result is not None
+                        and self._active.request_fingerprint != request_fingerprint
+                    ):
+                        self._active = None
+                    else:
+                        return self._active
                 active = self._start_codex_delegate_impl(
                     task=task,
                     goal=goal,
                     task_id=task_id,
+                    request_fingerprint=request_fingerprint,
                     cwd=cwd,
                     timeout=timeout,
                     files_in_scope=files_in_scope,
@@ -384,6 +785,8 @@ class ExecutorRegistry:
                     "error": "process_start_failed",
                     "cwd": str(cwd),
                     "timeout": timeout,
+                    "task_id": task_id,
+                    "request_fingerprint": request_fingerprint,
                     "started_at_monotonic": time.monotonic(),
                 },
             )
@@ -397,6 +800,8 @@ class ExecutorRegistry:
                 started_at=time.monotonic(),
                 log_paths=log_paths,
                 lock_wait_seconds=lock_wait_seconds,
+                request_fingerprint=request_fingerprint,
+                request_task_id=task_id,
             )
             active.result = self._result(
                 status="failed",
@@ -412,6 +817,8 @@ class ExecutorRegistry:
                 duration_seconds=0.0,
                 delegate_id=active.delegate_id,
                 log_paths=active.log_paths,
+                task_id=task_id,
+                request_fingerprint=request_fingerprint,
                 error={"code": "process_start_failed", "message": str(exc)},
             )
             completed.set()
@@ -430,6 +837,7 @@ class ExecutorRegistry:
         task: str | None,
         goal: str | None,
         task_id: str | None,
+        request_fingerprint: str,
         cwd: Path,
         timeout: int,
         files_in_scope: list[str],
@@ -472,6 +880,7 @@ class ExecutorRegistry:
                 "timeout": timeout,
                 "commit_mode": commit_mode,
                 "task_id": task_id,
+                "request_fingerprint": request_fingerprint,
                 "files_in_scope": files_in_scope,
                 "out_of_scope": out_of_scope,
                 "context_files": context_files,
@@ -505,6 +914,8 @@ class ExecutorRegistry:
                 started_at=started_at,
                 log_paths=log_paths,
                 lock_wait_seconds=lock_wait_seconds,
+                request_fingerprint=request_fingerprint,
+                request_task_id=task_id,
             )
             active.result = self._result(
                 status="failed",
@@ -520,6 +931,8 @@ class ExecutorRegistry:
                 duration_seconds=0.0,
                 delegate_id=delegate_id,
                 log_paths=log_paths,
+                task_id=task_id,
+                request_fingerprint=request_fingerprint,
                 error={"code": "process_start_failed", "message": str(exc)},
             )
             _write_private_json(
@@ -530,6 +943,8 @@ class ExecutorRegistry:
                     "error": {"code": "process_start_failed", "message": str(exc)},
                     "cwd": str(cwd),
                     "timeout": timeout,
+                    "task_id": task_id,
+                    "request_fingerprint": request_fingerprint,
                     "logs": log_paths.as_payload(),
                 },
             )
@@ -551,6 +966,8 @@ class ExecutorRegistry:
             started_at=started_at,
             log_paths=log_paths,
             lock_wait_seconds=lock_wait_seconds,
+            request_fingerprint=request_fingerprint,
+            request_task_id=task_id,
         )
 
     def _build_invocation_from_prompt(
@@ -592,6 +1009,7 @@ class ExecutorRegistry:
         stderr_stream = getattr(active.process, "stderr", None)
         stdout_thread: threading.Thread | None = None
         stderr_thread: threading.Thread | None = None
+        soft_timeout_elapsed = False
         try:
             if stdout_stream is None or stderr_stream is None:
                 stdout_raw, stderr_raw = active.process.communicate(timeout=active.timeout)
@@ -619,9 +1037,9 @@ class ExecutorRegistry:
                 stderr_thread.join(timeout=5)
                 stdout_raw = b"".join(active.stdout_chunks)
                 stderr_raw = b"".join(active.stderr_chunks)
-            timed_out = False
         except subprocess.TimeoutExpired:
-            active.process.kill()
+            soft_timeout_elapsed = True
+            self._mark_active_running_after_soft_timeout(active)
             if stdout_stream is None or stderr_stream is None:
                 stdout_raw, stderr_raw = active.process.communicate()
                 self._record_fallback_output(active, "stdout", stdout_raw, active.log_paths.stdout)
@@ -634,7 +1052,7 @@ class ExecutorRegistry:
                     stderr_thread.join(timeout=5)
                 stdout_raw = b"".join(active.stdout_chunks)
                 stderr_raw = b"".join(active.stderr_chunks)
-            timed_out = True
+        timed_out = False
 
         stdout = _decode_output(stdout_raw)
         stderr = _decode_output(stderr_raw)
@@ -665,8 +1083,12 @@ class ExecutorRegistry:
             duration_seconds=time.monotonic() - active.started_at,
             delegate_id=active.delegate_id,
             log_paths=active.log_paths,
+            task_id=active.request_task_id,
+            request_fingerprint=active.request_fingerprint,
             error=error,
+            soft_timeout_elapsed=soft_timeout_elapsed,
         )
+        self._remember_delegate_result(active)
         self._finalize_log_metadata(
             active=active,
             status=status,
@@ -676,6 +1098,28 @@ class ExecutorRegistry:
             error=error,
         )
         active.completed_event.set()
+
+    def _mark_active_running_after_soft_timeout(self, active: ActiveDelegate) -> None:
+        payload: dict[str, object] = {
+            "delegate_id": active.delegate_id,
+            "status": "running",
+            "timed_out": False,
+            "soft_timeout_elapsed": True,
+            "cwd": str(active.cwd),
+            "timeout": active.timeout,
+            "task_id": active.request_task_id,
+            "request_fingerprint": active.request_fingerprint,
+            "elapsed_seconds": round(time.monotonic() - active.started_at, 3),
+            "stdout_bytes": active.stdout_bytes,
+            "stderr_bytes": active.stderr_bytes,
+            "last_output_seconds_ago": self._last_output_seconds_ago(active),
+            "logs": active.log_paths.as_payload(),
+            "log_read_hint": _log_read_hint(active.log_paths),
+            "message": "Codex delegate exceeded the MCP wait timeout but is still running.",
+        }
+        if active.process is not None and getattr(active.process, "pid", None) is not None:
+            payload["pid"] = active.process.pid
+        _write_private_json(active.log_paths.metadata, payload)
 
     def _read_stream_to_log(self, active: ActiveDelegate, stream_name: str, stream, path: Path) -> None:
         chunks = active.stdout_chunks if stream_name == "stdout" else active.stderr_chunks
@@ -733,13 +1177,17 @@ class ExecutorRegistry:
             "status": status,
             "exit_code": exit_code,
             "timed_out": timed_out,
+            "soft_timeout_elapsed": duration_seconds >= active.timeout,
             "cwd": str(active.cwd),
             "timeout": active.timeout,
+            "task_id": active.request_task_id,
+            "request_fingerprint": active.request_fingerprint,
             "duration_seconds": round(duration_seconds, 3),
             "stdout_bytes": active.stdout_bytes,
             "stderr_bytes": active.stderr_bytes,
             "last_output_seconds_ago": self._last_output_seconds_ago(active),
             "logs": active.log_paths.as_payload(),
+            "log_read_hint": _log_read_hint(active.log_paths),
         }
         if active.process is not None and getattr(active.process, "pid", None) is not None:
             payload["pid"] = active.process.pid
@@ -753,6 +1201,8 @@ class ExecutorRegistry:
         *,
         wait_seconds: float,
         attached: bool,
+        request_conflict: bool = False,
+        requested_task_id: str | None = None,
     ) -> dict[str, object]:
         quiet_seconds = self._last_output_seconds_ago(active)
         activity_state = "active"
@@ -760,7 +1210,7 @@ class ExecutorRegistry:
             activity_state = "starting_or_quiet"
         if quiet_seconds is not None and quiet_seconds >= DELEGATE_STALL_HINT_SECONDS:
             activity_state = "suspected_stalled"
-        return {
+        payload: dict[str, object] = {
             "success": True,
             "status": "running",
             "in_progress": True,
@@ -768,6 +1218,8 @@ class ExecutorRegistry:
             "executor": "codex",
             "cwd": str(active.cwd),
             "delegate_id": active.delegate_id,
+            "task_id": active.request_task_id,
+            "request_fingerprint": active.request_fingerprint,
             "pid": getattr(active.process, "pid", None),
             "serial": True,
             "attached_to_running_delegate": attached,
@@ -777,13 +1229,29 @@ class ExecutorRegistry:
             "stdout_bytes": active.stdout_bytes,
             "stderr_bytes": active.stderr_bytes,
             "logs": active.log_paths.as_payload(),
+            "log_read_hint": _log_read_hint(active.log_paths),
             "wait_seconds": round(wait_seconds, 3),
             "timeout": active.timeout,
             "timed_out": False,
             "wait_timed_out": True,
+            "soft_timeout_elapsed": (time.monotonic() - active.started_at) >= active.timeout,
             "message": "Codex delegate is still running. Call delegate_task again to continue waiting.",
             "next": "call delegate_task again without task/goal, or repeat the same delegate_task call",
         }
+        if request_conflict:
+            payload.update(
+                {
+                    "request_conflict": True,
+                    "new_task_started": False,
+                    "requested_task_id": requested_task_id,
+                    "message": (
+                        "Another Codex delegate is already running; the requested new task was "
+                        "not started."
+                    ),
+                    "next": "call delegate_task without task/goal to wait for the active delegate, then retry the new task",
+                }
+            )
+        return payload
 
     def _result(
         self,
@@ -801,7 +1269,10 @@ class ExecutorRegistry:
         duration_seconds: float,
         delegate_id: str,
         log_paths: DelegateLogPaths,
+        task_id: str | None = None,
+        request_fingerprint: str | None = None,
         error: dict[str, object] | None = None,
+        soft_timeout_elapsed: bool = False,
     ) -> dict[str, object]:
         payload: dict[str, object] = {
             "success": status == "succeeded",
@@ -812,19 +1283,24 @@ class ExecutorRegistry:
             "cwd": str(cwd),
             "delegate_id": delegate_id,
             "logs": log_paths.as_payload(),
+            "log_read_hint": _log_read_hint(log_paths),
             "exit_code": exit_code,
-            "stdout": stdout,
-            "stderr": stderr,
-            "summary": _summarize(stdout, stderr),
+            "summary": _result_summary(status, error),
+            "output_omitted": True,
             "timed_out": timed_out,
             "wait_timed_out": False,
             "timeout": timeout,
             "serial": True,
             "lock_wait_seconds": round(lock_wait_seconds, 3),
             "duration_seconds": round(duration_seconds, 3),
+            "soft_timeout_elapsed": soft_timeout_elapsed,
             "structured_output": structured_output,
             "output_schema": output_schema,
         }
+        if task_id is not None:
+            payload["task_id"] = task_id
+        if request_fingerprint is not None:
+            payload["request_fingerprint"] = request_fingerprint
         if error is not None:
             payload["error"] = error
         return payload
@@ -832,6 +1308,13 @@ class ExecutorRegistry:
     def _last_output_seconds_ago(self, active: ActiveDelegate) -> float | None:
         reference = active.last_output_at or active.started_at
         return round(time.monotonic() - reference, 3)
+
+    def _activity_state(self, active: ActiveDelegate, quiet_seconds: float | None) -> str:
+        if active.last_output_at is None:
+            return "starting_or_quiet"
+        if quiet_seconds is not None and quiet_seconds >= DELEGATE_STALL_HINT_SECONDS:
+            return "suspected_stalled"
+        return "active"
 
     def _build_invocation(
         self,
@@ -930,6 +1413,11 @@ class ExecutorRegistry:
             lines.extend(f"- {path}" for path in context_files)
         lines.extend(
             [
+                "",
+                "Progress logging contract:",
+                "- Print concise progress updates to stderr as work advances, especially before long-running commands.",
+                "- Keep stdout quiet unless emitting the compact final manifest or requested structured JSON.",
+                "- The MCP server persists stdout/stderr to local delegate logs, and the caller may inspect them with read_text while status=running.",
                 "",
                 "Output contract:",
                 "- Return a compact execution manifest: status, files changed, commands run, verification result, deviations or blockers.",

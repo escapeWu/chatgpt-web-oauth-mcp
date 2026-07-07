@@ -53,8 +53,9 @@ src/chatgpt_web_oauth_mcp/
 | `write_file` | Create or overwrite a file, with dry-run support |
 | `apply_patch` | Structured patch editing for existing files |
 | `git_status` / `git_diff` / `git_commit` / `git_log` / `git_show` / `git_blame` | Structured git workflows |
-| `run_command` | Execute one shell command, or multiple commands with `mode="sequential"` or `mode="parallel"`; parallel batches cap `max_concurrency` at 3 |
-| `delegate_task` | Run one serialized, bounded Codex execution slice; wait up to 180s, then return either the result or `status=running` |
+| `run_command` | Execute one shell command, or multiple commands with `mode="sequential"` or `mode="parallel"`; timeout is capped at 300s unless `force=true` is used after explicit user approval; parallel batches cap `max_concurrency` at 3 |
+| `delegate_task` | Run one serialized, bounded Codex execution slice; wait up to 300s by default, then return either the result or `status=running` with readable log paths while Codex continues |
+| `delegate_status` | Read-only active/recent delegate status list with server-generated `delegate_id` values and log paths; supports `watch_seconds` long-polling up to 300s |
 | `obsidian_*` tools | Optional Obsidian native MCP proxy tools; only registered when `CHATGPT_MCP_ENABLE_OBSIDIAN=1` |
 
 ## Key concepts
@@ -63,7 +64,7 @@ src/chatgpt_web_oauth_mcp/
 - OAuth mode is enabled with `CHATGPT_MCP_AUTH_MODE=oauth`.
 - `CHATGPT_MCP_PUBLIC_BASE_URL` must be set in OAuth mode so issuer and resource URLs are stable and not Host-header-derived.
 - Prefer separate `CHATGPT_MCP_AUTH_TOKEN` and `CHATGPT_MCP_OAUTH_LOGIN_TOKEN` values.
-- `delegate_task` is intentionally Codex-only and single-flight. It should receive one small execution prompt with `task_id`, `files_in_scope`, `out_of_scope`, `acceptance_criteria`, `done_means`, and verification commands when possible. It long-polls the active delegate for up to 180 seconds by default; if Codex is still running, it returns `status=running` and the client should call `delegate_task` again to continue waiting. Each delegate writes private audit logs under the system temporary cache directory (`prompt.txt`, `stdout.log`, `stderr.log`, `metadata.json`) and returns their paths in `logs`. No separate task polling, TaskBoard, Claude delegate, or skill-discovery tools are exposed.
+- `delegate_task` is intentionally Codex-only and single-flight. It should receive one small execution prompt with `files_in_scope`, `out_of_scope`, `acceptance_criteria`, `done_means`, and verification commands when possible. A caller-provided `task_id` is optional; the server always returns a generated `delegate_id`, and stateless clients can call `delegate_status` to recover active/recent delegate ids. It long-polls the active delegate for up to 300 seconds by default; if Codex is still running, it returns `status=running` and the client should call `delegate_task` again to continue waiting. `delegate_status` can also long-poll with `watch_seconds=300` and returns early only when task status changes. Each delegate writes private audit logs under the system temporary cache directory (`prompt.txt`, `stdout.log`, `stderr.log`, `metadata.json`) and returns their paths in `logs`; callers can use `read_text` on those paths to inspect live progress. Completed delegate responses do not inline raw stdout/stderr; read the returned logs for raw output. No TaskBoard, Claude delegate, or skill-discovery tools are exposed.
 
 ## Development rules
 

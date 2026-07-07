@@ -63,12 +63,16 @@ MCP_INSTRUCTIONS = (
     "Use search/read_text for focused or batched discovery and reading, apply_patch/write_file for edits, "
     "run_command for short single or batched shell work, and git_* only inside a git repository. "
     "Use delegate_task only for one bounded Codex Execution Prompt when direct tools are insufficient; "
-    "it runs one serialized Codex delegate and blocks up to 180 seconds by default. If it returns "
-    "status=running, call delegate_task again to continue waiting. Each delegate writes private "
-    "audit logs under the system temporary cache directory and returns their paths in logs. Do not "
+    "it runs one serialized Codex delegate and blocks up to 300 seconds by default. If it returns "
+    "status=running, call delegate_task again to continue waiting and use read_text on returned "
+    "stdout/stderr/metadata log paths for live progress. Each delegate writes private "
+    "audit logs under the system temporary cache directory and returns their paths in logs. Completed "
+    "delegate responses do not inline raw stdout/stderr; use read_text on logs for output. Do not "
     "use delegate_task as a large opaque planning/research loop; split broad work into small "
     "verified execution prompts. "
-    "No task polling, taskboard, or skill-discovery tools are exposed."
+    "Use delegate_status when the browser context is stateless and needs the active or recent "
+    "server-generated delegate_id values; pass watch_seconds=300 for a five-minute status-change "
+    "monitor. No taskboard or skill-discovery tools are exposed."
 )
 
 mcp = FastMCP(

@@ -11,11 +11,43 @@ from typing import Literal
 # callers can always do numeric comparisons like `exit_code == 0` without
 # special-casing `None`.
 TIMEOUT_EXIT_CODE = -1
+MAX_COMMAND_TIMEOUT_SECONDS = 300
 MAX_COMMAND_BATCH_CONCURRENCY = 3
 MAX_COMMAND_BATCH_SIZE = 20
 
 
-def run_command(*, command: str, cwd: Path, timeout: int) -> dict[str, object]:
+def _timeout_limit_error(timeout: int) -> dict[str, object]:
+    return {
+        "success": False,
+        "error": {
+            "code": "timeout_exceeds_limit",
+            "message": (
+                f"run_command timeout is limited to {MAX_COMMAND_TIMEOUT_SECONDS}s. "
+                "Complex or long-running tasks should be delegated with delegate_task so Codex can "
+                "run them with local audit logs. If run_command is still required, set force=true "
+                "only after explicit user approval."
+            ),
+            "requested_timeout_seconds": timeout,
+            "max_timeout_seconds": MAX_COMMAND_TIMEOUT_SECONDS,
+            "force_required": True,
+            "approval_required": True,
+        },
+        "exit_code": TIMEOUT_EXIT_CODE,
+        "stdout": "",
+        "stderr": "",
+        "timed_out": False,
+        "timeout": timeout,
+        "hint": "delegate_task_or_force_after_user_approval",
+    }
+
+
+def run_command(*, command: str, cwd: Path, timeout: int, force: bool = False) -> dict[str, object]:
+    if timeout > MAX_COMMAND_TIMEOUT_SECONDS and not force:
+        payload = _timeout_limit_error(timeout)
+        payload["command"] = command
+        payload["cwd"] = str(cwd)
+        return payload
+
     if not cwd.exists():
         return {
             "success": False,
@@ -29,6 +61,7 @@ def run_command(*, command: str, cwd: Path, timeout: int) -> dict[str, object]:
             "stdout": "",
             "stderr": "",
             "timed_out": False,
+            "timeout": timeout,
         }
     if not cwd.is_dir():
         return {
@@ -43,6 +76,7 @@ def run_command(*, command: str, cwd: Path, timeout: int) -> dict[str, object]:
             "stdout": "",
             "stderr": "",
             "timed_out": False,
+            "timeout": timeout,
         }
 
     try:
@@ -62,6 +96,8 @@ def run_command(*, command: str, cwd: Path, timeout: int) -> dict[str, object]:
             "stdout": completed.stdout,
             "stderr": completed.stderr,
             "timed_out": False,
+            "timeout": timeout,
+            "force": force,
         }
     except subprocess.TimeoutExpired as exc:
         return {
@@ -108,9 +144,22 @@ def run_commands(
     commands: list[str],
     cwd: Path,
     timeout: int,
+    force: bool = False,
     mode: Literal["sequential", "parallel"] = "sequential",
     max_concurrency: int = MAX_COMMAND_BATCH_CONCURRENCY,
 ) -> dict[str, object]:
+    if timeout > MAX_COMMAND_TIMEOUT_SECONDS and not force:
+        payload = _timeout_limit_error(timeout)
+        payload.update(
+            {
+                "mode": "batch",
+                "cwd": str(cwd),
+                "results": [],
+                "command_count": len(commands),
+            }
+        )
+        return payload
+
     if not commands:
         return _invalid_batch_arguments("Provide at least one command.")
     if any(not command.strip() for command in commands):
@@ -130,7 +179,7 @@ def run_commands(
         results = [
             _with_batch_index(
                 index,
-                run_command(command=command, cwd=cwd, timeout=timeout),
+                run_command(command=command, cwd=cwd, timeout=timeout, force=force),
             )
             for index, command in enumerate(commands)
         ]
@@ -140,7 +189,13 @@ def run_commands(
         ordered_results: list[dict[str, object] | None] = [None] * len(commands)
         with ThreadPoolExecutor(max_workers=effective_concurrency) as executor:
             futures = {
-                executor.submit(run_command, command=command, cwd=cwd, timeout=timeout): index
+                executor.submit(
+                    run_command,
+                    command=command,
+                    cwd=cwd,
+                    timeout=timeout,
+                    force=force,
+                ): index
                 for index, command in enumerate(commands)
             }
             for future in as_completed(futures):
@@ -159,5 +214,7 @@ def run_commands(
         "failed_count": failed_count,
         "timed_out_count": timed_out_count,
         "max_concurrency": effective_concurrency,
+        "timeout": timeout,
+        "force": force,
         "results": results,
     }

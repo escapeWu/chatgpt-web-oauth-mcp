@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from chatgpt_web_oauth_mcp.executors import ExecutorRegistry
+from chatgpt_web_oauth_mcp.shell import MAX_COMMAND_TIMEOUT_SECONDS
 
 
 def _call(tool, *args, **kwargs):
@@ -183,6 +184,31 @@ def test_server_run_command_supports_batch_modes(tmp_path: Path) -> None:
     assert [item["stdout"].strip() for item in parallel["results"]] == ["red", "blue"]
 
 
+def test_server_run_command_timeout_limit_requires_force(tmp_path: Path) -> None:
+    from chatgpt_web_oauth_mcp import server
+
+    rejected = _call(
+        server.run_command,
+        command="echo hi",
+        cwd=str(tmp_path),
+        timeout=MAX_COMMAND_TIMEOUT_SECONDS + 1,
+    )
+    forced = _call(
+        server.run_command,
+        command=_python_cmd("print('forced')"),
+        cwd=str(tmp_path),
+        timeout=MAX_COMMAND_TIMEOUT_SECONDS + 1,
+        force=True,
+    )
+
+    assert rejected["success"] is False
+    assert rejected["error"]["code"] == "timeout_exceeds_limit"
+    assert rejected["error"]["approval_required"] is True
+    assert forced["success"] is True
+    assert forced["force"] is True
+    assert forced["stdout"].strip() == "forced"
+
+
 def test_server_read_text_supports_single_and_batch_modes(tmp_path: Path) -> None:
     from chatgpt_web_oauth_mcp import server
 
@@ -301,6 +327,52 @@ def test_server_delegate_task_accepts_structured_fields(tmp_path: Path) -> None:
         server.registry = old_registry
 
 
+def test_server_delegate_task_validation_errors_are_structured(tmp_path: Path) -> None:
+    from chatgpt_web_oauth_mcp import server
+
+    old_registry = server.registry
+    try:
+        server.registry = ExecutorRegistry(codex_command=_python_cmd("print('should-not-run')"))
+        missing_task = _call(server.delegate_task, cwd=str(tmp_path))
+        invalid_commit_mode = _call(
+            server.delegate_task,
+            task="Implement the fallback flow",
+            cwd=str(tmp_path),
+            commit_mode="disallowed",
+        )
+
+        assert missing_task["success"] is False
+        assert missing_task["status"] == "failed"
+        assert missing_task["error"]["code"] == "missing_task_or_goal"
+        assert invalid_commit_mode["success"] is False
+        assert invalid_commit_mode["status"] == "failed"
+        assert invalid_commit_mode["error"]["code"] == "unsupported_commit_mode"
+    finally:
+        server.registry = old_registry
+
+
+def test_server_delegate_status_lists_recent_delegates(tmp_path: Path) -> None:
+    from chatgpt_web_oauth_mcp import server
+
+    old_registry = server.registry
+    try:
+        server.registry = ExecutorRegistry(codex_command=_python_cmd("print('ok')"))
+        result = _call(
+            server.delegate_task,
+            task="Run a short status-visible task",
+            cwd=str(tmp_path),
+        )
+        status = _call(server.delegate_status)
+
+        assert result["status"] == "succeeded"
+        assert status["success"] is True
+        assert status["latest"]["delegate_id"] == result["delegate_id"]
+        assert status["latest"]["status"] == "succeeded"
+        assert status["latest"]["logs"]["stdout"]
+    finally:
+        server.registry = old_registry
+
+
 def test_server_apply_patch_tool_description_uses_generic_patch_language() -> None:
     from chatgpt_web_oauth_mcp import server
 
@@ -343,7 +415,7 @@ def test_registered_tool_input_schemas_document_parameters() -> None:
         "required",
         "forbidden",
     ]
-    for name in ["command", "commands", "mode", "max_concurrency"]:
+    for name in ["command", "commands", "mode", "max_concurrency", "force"]:
         assert name in schemas["run_command"]["properties"]
     for name in ["queries", "mode", "max_concurrency"]:
         assert name in schemas["search"]["properties"]
@@ -353,6 +425,8 @@ def test_registered_tool_input_schemas_document_parameters() -> None:
     ]
     for name in ["task_id", "files_in_scope", "out_of_scope", "done_means"]:
         assert name in schemas["delegate_task"]["properties"]
+    for name in ["delegate_id", "limit", "watch_seconds", "poll_seconds"]:
+        assert name in schemas["delegate_status"]["properties"]
 
 
 def test_server_tools_expose_chatgpt_compatible_annotations() -> None:
@@ -384,6 +458,7 @@ def test_server_tools_expose_chatgpt_compatible_annotations() -> None:
     assert annotations["write_file"]["destructiveHint"] is True
     assert annotations["run_command"]["openWorldHint"] is True
     assert annotations["delegate_task"]["openWorldHint"] is True
+    assert annotations["delegate_status"]["readOnlyHint"] is True
     for removed in [
         "run_command_stream",
         "get_task",

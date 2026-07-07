@@ -4,6 +4,7 @@ from pathlib import Path
 
 from chatgpt_web_oauth_mcp.shell import (
     MAX_COMMAND_BATCH_CONCURRENCY,
+    MAX_COMMAND_TIMEOUT_SECONDS,
     TIMEOUT_EXIT_CODE,
     run_command,
     run_commands,
@@ -43,6 +44,34 @@ def test_run_command_timeout_returns_unified_shape(tmp_path: Path) -> None:
     assert result["error"]["code"] == "timed_out"
     assert "timeout" in result["error"]["message"].lower()
     assert result["hint"] == "increase_timeout_or_delegate"
+
+
+def test_run_command_rejects_timeout_above_limit_without_force(tmp_path: Path) -> None:
+    result = run_command(
+        command="echo hi",
+        cwd=tmp_path,
+        timeout=MAX_COMMAND_TIMEOUT_SECONDS + 1,
+    )
+
+    assert result["success"] is False
+    assert result["timed_out"] is False
+    assert result["error"]["code"] == "timeout_exceeds_limit"
+    assert result["error"]["force_required"] is True
+    assert result["error"]["approval_required"] is True
+    assert result["hint"] == "delegate_task_or_force_after_user_approval"
+
+
+def test_run_command_allows_timeout_above_limit_with_force(tmp_path: Path) -> None:
+    result = run_command(
+        command=_python_cmd("print('forced')"),
+        cwd=tmp_path,
+        timeout=MAX_COMMAND_TIMEOUT_SECONDS + 1,
+        force=True,
+    )
+
+    assert result["success"] is True
+    assert result["force"] is True
+    assert result["stdout"].strip() == "forced"
 
 
 def test_run_command_cwd_errors_include_exit_code_field(tmp_path: Path) -> None:
@@ -131,3 +160,17 @@ def test_run_commands_rejects_empty_command_items(tmp_path: Path) -> None:
     assert result["success"] is False
     assert result["error"]["code"] == "invalid_arguments"
     assert "non-empty" in result["error"]["message"]
+
+
+def test_run_commands_rejects_timeout_above_limit_without_force(tmp_path: Path) -> None:
+    result = run_commands(
+        commands=["echo ok"],
+        cwd=tmp_path,
+        timeout=MAX_COMMAND_TIMEOUT_SECONDS + 1,
+        mode="sequential",
+    )
+
+    assert result["success"] is False
+    assert result["mode"] == "batch"
+    assert result["error"]["code"] == "timeout_exceeds_limit"
+    assert result["results"] == []

@@ -2,7 +2,7 @@
 
 > [感谢 LINIXDO 社区](https://linux.do/)
 
-一个给 **ChatGPT Web** 使用的本地 FastMCP 服务器：通过公网 HTTPS + OAuth 暴露 `/mcp`，让 ChatGPT Web 可以调用你本机的文件、搜索、补丁编辑、单条或批量 Shell、Git，以及单任务串行、每次最多阻塞 180 秒的 Codex 执行委托能力。
+一个给 **ChatGPT Web** 使用的本地 FastMCP 服务器：通过公网 HTTPS + OAuth 暴露 `/mcp`，让 ChatGPT Web 可以调用你本机的文件、搜索、补丁编辑、单条或批量 Shell、Git，以及单任务串行、每次默认最多阻塞 300 秒的 Codex 执行委托能力。
 
 这个版本已经剥离原项目中的 Notion 专用工作流、说明文档、截图资源和提示词，只保留 ChatGPT Web OAuth MCP 适配与本地操作工具。
 
@@ -33,4 +33,4 @@
 
 ChatGPT Web 是 architect / manager / reviewer：优先通过直接 MCP 工具做仓库检查、计划、局部编辑和验证。`delegate_task` 只作为单任务 Codex executor 使用，每次传入一个边界清楚的 Codex Execution Prompt，例如 `task_id`、`files_in_scope`、`out_of_scope`、`acceptance_criteria`、`done_means` 和验证命令。不要把一个大而泛的长期分析塞进 Codex 委托里变成黑盒。
 
-每次 Codex 委托都会在系统临时缓存目录下写入私有审计日志，路径形如 `chatgpt-web-oauth-mcp/codex-delegates/<timestamp>-<delegate_id>/`。`delegate_task` 返回值里的 `logs` 会指向 `prompt.txt`、`stdout.log`、`stderr.log` 和 `metadata.json`。平台支持时这些文件使用仅当前用户可读写的权限。Prompt 会通过 `codex exec -` 的 stdin 传入，不放在进程命令行里。
+每次 Codex 委托都会在系统临时缓存目录下写入私有审计日志，路径形如 `chatgpt-web-oauth-mcp/codex-delegates/<timestamp>-<delegate_id>/`。`delegate_task` 返回值里的 `logs` 会指向 `prompt.txt`、`stdout.log`、`stderr.log` 和 `metadata.json`。当委托仍在运行时，调用方可以用 `read_text` 读取这些 stdout/stderr/metadata 路径来审查实时进度。委托完成后的响应不再内联原始 stdout/stderr，需要原始输出时读取返回的日志文件。无状态调用方可以用 `delegate_status` 找回当前和最近的服务端 `delegate_id` 以及日志路径；需要持续监控时传 `watch_seconds=300`，默认每 5 秒检查一次，状态变化则提前返回，否则 5 分钟后返回最后一次快照。平台支持时这些文件使用仅当前用户可读写的权限。Prompt 会通过 `codex exec -` 的 stdin 传入，不放在进程命令行里。

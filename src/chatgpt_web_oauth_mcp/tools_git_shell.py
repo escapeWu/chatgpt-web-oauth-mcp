@@ -11,7 +11,7 @@ from .gitops import git_log as git_log_impl
 from .gitops import git_show as git_show_impl
 from .gitops import git_status as git_status_impl
 from .pathing import resolve_cwd
-from .shell import MAX_COMMAND_BATCH_CONCURRENCY
+from .shell import MAX_COMMAND_BATCH_CONCURRENCY, MAX_COMMAND_TIMEOUT_SECONDS
 from .shell import run_command as run_command_impl
 from .shell import run_commands as run_commands_impl
 from .tool_context import LOCAL_WRITE_TOOL, OPEN_WORLD_WRITE_TOOL, READ_ONLY_TOOL, ToolContext
@@ -183,7 +183,9 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         annotations=OPEN_WORLD_WRITE_TOOL,
         description=(
             "Run one local shell command, or run a batch of commands with mode=sequential "
-            "or mode=parallel. Parallel batches are capped at max_concurrency=3."
+            f"or mode=parallel. Timeout is capped at {MAX_COMMAND_TIMEOUT_SECONDS}s unless "
+            "force=true is set after explicit user approval. Parallel batches are capped at "
+            "max_concurrency=3."
         ),
     )
     def run_command(
@@ -201,8 +203,24 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         ] = None,
         timeout: Annotated[
             int | None,
-            Field(description="Maximum runtime in seconds for each command before it is killed."),
+            Field(
+                description=(
+                    f"Maximum runtime in seconds for each command before it is killed. "
+                    f"Values above {MAX_COMMAND_TIMEOUT_SECONDS}s are rejected unless force=true "
+                    "has explicit user approval."
+                )
+            ),
         ] = None,
+        force: Annotated[
+            bool,
+            Field(
+                description=(
+                    f"Allow run_command timeouts above {MAX_COMMAND_TIMEOUT_SECONDS}s. Set this "
+                    "only after explicit user approval; otherwise use delegate_task for complex "
+                    "or long-running work."
+                )
+            ),
+        ] = False,
         mode: Annotated[
             Literal["sequential", "parallel"],
             Field(description="Batch execution mode when commands is provided."),
@@ -237,6 +255,7 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
                 commands=commands,
                 cwd=resolved_cwd,
                 timeout=effective_timeout,
+                force=force,
                 mode=mode,
                 max_concurrency=max_concurrency,
             )
@@ -244,6 +263,7 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             command=command or "",
             cwd=resolved_cwd,
             timeout=effective_timeout,
+            force=force,
         )
 
     @mcp.tool(
@@ -254,10 +274,14 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             "Fallback executor only. Run exactly one bounded Codex Execution Prompt, serialized "
             "behind any other active Codex delegate call. ChatGPT Web should act as the "
             "architect/manager: inspect, plan, and review with direct MCP tools, then call this "
-            "only for a small local execution slice. Blocks for up to wait_seconds (default 180) "
-            "and returns status=running when Codex is still working, so callers can invoke this "
-            "tool again to continue waiting. Each run writes private audit logs under the system "
-            "temporary cache directory and returns their paths in logs. "
+            "only for a small local execution slice. Blocks for up to timeout/wait_seconds "
+            "(default 300s) and returns status=running when Codex is still working; Codex "
+            "continues running and callers can invoke this tool again to continue waiting. "
+            "Each run writes private audit logs under the system temporary cache directory and "
+            "returns their paths in logs; callers can use read_text on stdout/stderr/metadata "
+            "to inspect live progress. Completed responses do not inline stdout/stderr; use logs "
+            "for raw output. If another non-matching delegate is active, the requested new task is "
+            "not started and the response includes request_conflict/new_task_started=false. "
             "Optionally provide output_schema and parse_structured_output=true to capture JSON output."
         ),
     )
@@ -355,21 +379,22 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             int | None,
             Field(
                 description=(
-                    "Maximum total runtime in seconds for the Codex subprocess before it is killed. "
-                    "Defaults to CHATGPT_MCP_DELEGATE_TIMEOUT."
+                    "Soft MCP wait timeout in seconds. Defaults to CHATGPT_MCP_DELEGATE_TIMEOUT "
+                    "(normally 300). When exceeded, the tool returns status=running with log paths; "
+                    "the Codex subprocess is not killed."
                 )
             ),
         ] = None,
         wait_seconds: Annotated[
-            float,
+            float | None,
             Field(
                 description=(
-                    "Maximum seconds this MCP call should block waiting for Codex. Default 180. "
-                    "If Codex is still running after this wait, the tool returns status=running; "
-                    "call delegate_task again to continue waiting."
+                    "Optional override for how long this MCP call should block waiting for Codex. "
+                    "Defaults to timeout. If Codex is still running after this wait, the tool "
+                    "returns status=running and log paths; call delegate_task again to continue waiting."
                 )
             ),
-        ] = 180,
+        ] = None,
         output_schema: Annotated[
             dict[str, object] | None,
             Field(
@@ -390,13 +415,15 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         ] = True,
     ) -> dict[str, object]:
         resolved_cwd = resolve_cwd(cwd, ctx.workspace_root)
+        effective_timeout = timeout if timeout is not None else ctx.delegate_timeout
+        effective_wait_seconds = wait_seconds if wait_seconds is not None else effective_timeout
         return ctx.registry.run_codex(
             task=task,
             goal=goal,
             task_id=task_id,
             cwd=resolved_cwd,
-            timeout=timeout if timeout is not None else ctx.delegate_timeout,
-            wait_seconds=wait_seconds,
+            timeout=effective_timeout,
+            wait_seconds=effective_wait_seconds,
             files_in_scope=files_in_scope,
             out_of_scope=out_of_scope,
             context_files=context_files,
@@ -408,6 +435,63 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             parse_structured_output=parse_structured_output,
         )
 
+    @mcp.tool(
+        name="delegate_status",
+        title="Delegate Status",
+        annotations=READ_ONLY_TOOL,
+        description=(
+            "Inspect the current and recent Codex delegates without relying on ChatGPT Web "
+            "to remember a caller-generated task_id. Returns the active delegate, latest "
+            "delegate, and a recent list with server-generated delegate_id values plus log "
+            "paths. Pass delegate_id to fetch one known delegate. Set watch_seconds up to "
+            "300 to long-poll every poll_seconds seconds and return early only when task "
+            "status changes; if no status change occurs, the last snapshot is returned."
+        ),
+    )
+    def delegate_status(
+        delegate_id: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Optional server-generated delegate_id to inspect. Omit to list the active "
+                    "delegate and recent completed delegates."
+                )
+            ),
+        ] = None,
+        limit: Annotated[
+            int,
+            Field(description="Maximum recent delegates to return. Hard limit: 20.", ge=1, le=20),
+        ] = 10,
+        watch_seconds: Annotated[
+            float,
+            Field(
+                description=(
+                    "Optional long-poll window in seconds. Use 300 for a five-minute monitor. "
+                    "When positive, delegate_status polls until task status changes or the "
+                    "watch window expires. Hard limit: 300."
+                ),
+                ge=0,
+                le=300,
+            ),
+        ] = 0,
+        poll_seconds: Annotated[
+            float,
+            Field(
+                description=(
+                    "Polling interval in seconds while watch_seconds is positive. Defaults to 5."
+                ),
+                ge=0.1,
+                le=60,
+            ),
+        ] = 5,
+    ) -> dict[str, object]:
+        return ctx.registry.delegate_status(
+            delegate_id=delegate_id,
+            limit=limit,
+            watch_seconds=watch_seconds,
+            poll_seconds=poll_seconds,
+        )
+
     return {
         "git_status": git_status,
         "git_diff": git_diff,
@@ -417,4 +501,5 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         "git_blame": git_blame,
         "run_command": run_command,
         "delegate_task": delegate_task,
+        "delegate_status": delegate_status,
     }

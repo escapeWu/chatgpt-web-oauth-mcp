@@ -47,7 +47,15 @@ directory, in `chatgpt-web-oauth-mcp/codex-delegates/<timestamp>-<delegate_id>/`
 The returned `logs` object points to `prompt.txt`, `stdout.log`, `stderr.log`,
 and `metadata.json`. Files are created with owner-only permissions where the
 platform supports it. The prompt is passed to `codex exec -` over stdin rather
-than placed on the process command line.
+than placed on the process command line. While a delegate is still running,
+clients can call `read_text` on the returned stdout/stderr/metadata paths to
+inspect live progress. Completed `delegate_task` responses do not inline raw
+stdout/stderr; read the returned log files when raw output is needed.
+Stateless clients can call `delegate_status` to recover the active and recent
+server-generated `delegate_id` values plus their log paths. For long-polling,
+call `delegate_status` with `watch_seconds=300` and the default `poll_seconds=5`;
+it returns early when task status changes, otherwise it returns the last snapshot
+when the watch window expires.
 
 ## How ChatGPT Web connects
 
@@ -203,7 +211,7 @@ When enabled, the bridge exposes prefixed tools such as `obsidian_vault_list`, `
 | `CHATGPT_MCP_TUNNEL_NAME` | no | empty |
 | `CHATGPT_MCP_CODEX_COMMAND` | no | `codex` |
 | `CHATGPT_MCP_COMMAND_TIMEOUT` | no | `120` |
-| `CHATGPT_MCP_DELEGATE_TIMEOUT` | no | `1800` |
+| `CHATGPT_MCP_DELEGATE_TIMEOUT` | no | `300` |
 | `CHATGPT_MCP_DEBUG_MCP_LOGGING` | no | `0` |
 | `CHATGPT_MCP_GRACEFUL_SHUTDOWN_SECONDS` | no | `30` |
 | `CHATGPT_MCP_ENABLE_OBSIDIAN` | no | `0` |
@@ -223,8 +231,9 @@ When enabled, the bridge exposes prefixed tools such as `obsidian_vault_list`, `
 | `write_file` | Write full file contents, with dry-run support |
 | `apply_patch` | Apply structured patches to existing files |
 | `git_status` / `git_diff` / `git_commit` / `git_log` / `git_show` / `git_blame` | Structured git operations |
-| `run_command` | Run one shell command, or run multiple commands with `mode="sequential"` or `mode="parallel"`; parallel batches cap `max_concurrency` at 3 |
-| `delegate_task` | Run one serialized, bounded Codex execution slice; wait up to 180s, then return stdout/stderr/status or `status=running` |
+| `run_command` | Run one shell command, or run multiple commands with `mode="sequential"` or `mode="parallel"`; timeout is capped at 300s unless `force=true` is used after explicit user approval; parallel batches cap `max_concurrency` at 3 |
+| `delegate_task` | Run one serialized, bounded Codex execution slice; wait up to 300s by default, then return status/log paths or `status=running` with readable log paths while Codex continues; raw stdout/stderr stay in log files |
+| `delegate_status` | Read-only active/recent delegate status list with server-generated `delegate_id` values and log paths; supports `watch_seconds` long-polling up to 300s |
 | `obsidian_*` tools | Optional Obsidian native MCP proxy tools; only registered when `CHATGPT_MCP_ENABLE_OBSIDIAN=1` |
 
 ## Security notes

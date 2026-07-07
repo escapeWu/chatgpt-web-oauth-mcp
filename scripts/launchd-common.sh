@@ -171,7 +171,7 @@ prepare_launchd_env() {
   export CHATGPT_MCP_TUNNEL_NAME="${override_tunnel_name:-${CHATGPT_MCP_TUNNEL_NAME:-}}"
   export CHATGPT_MCP_CODEX_COMMAND="${override_codex_command:-${CHATGPT_MCP_CODEX_COMMAND:-codex}}"
   export CHATGPT_MCP_COMMAND_TIMEOUT="${override_command_timeout:-${CHATGPT_MCP_COMMAND_TIMEOUT:-120}}"
-  export CHATGPT_MCP_DELEGATE_TIMEOUT="${override_delegate_timeout:-${CHATGPT_MCP_DELEGATE_TIMEOUT:-1800}}"
+  export CHATGPT_MCP_DELEGATE_TIMEOUT="${override_delegate_timeout:-${CHATGPT_MCP_DELEGATE_TIMEOUT:-300}}"
   export CHATGPT_MCP_DEBUG_MCP_LOGGING="${override_debug_mcp_logging:-${CHATGPT_MCP_DEBUG_MCP_LOGGING:-0}}"
   export CHATGPT_MCP_GRACEFUL_SHUTDOWN_SECONDS="${override_graceful_shutdown_seconds:-${CHATGPT_MCP_GRACEFUL_SHUTDOWN_SECONDS:-30}}"
   export CHATGPT_MCP_WATCHDOG_INTERVAL_SECONDS="${override_watchdog_interval_seconds:-${CHATGPT_MCP_WATCHDOG_INTERVAL_SECONDS:-60}}"

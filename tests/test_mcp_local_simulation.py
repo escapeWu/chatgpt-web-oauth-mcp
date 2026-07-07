@@ -194,6 +194,20 @@ def test_mcp_delegate_task_structured_output_end_to_end(tmp_path: Path, monkeypa
         anyio.run(scenario)
 
 
+def test_mcp_delegate_task_validation_error_end_to_end(tmp_path: Path, monkeypatch) -> None:
+    token = "secret-token"
+    with _running_server(tmp_path, monkeypatch, auth_token=token) as url:
+
+        async def scenario() -> None:
+            async with _mcp_session(url, token=token) as session:
+                result = await _call_tool(session, "delegate_task", {})
+                assert result["success"] is False
+                assert result["status"] == "failed"
+                assert result["error"]["code"] == "missing_task_or_goal"
+
+        anyio.run(scenario)
+
+
 def test_mcp_canonical_search_and_read_text_end_to_end(tmp_path: Path, monkeypatch) -> None:
     token = "secret-token"
     (tmp_path / "demo.py").write_text("alpha\nTODO item\n", encoding="utf-8")
