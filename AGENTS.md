@@ -26,14 +26,15 @@ or research loop.
 src/chatgpt_web_oauth_mcp/
 ├── server.py      # FastMCP composition, HTTP app integration, uvicorn entrypoint / fd-aware child
 ├── tool_context.py # Shared runtime lookup context and MCP tool annotations
-├── tools_core.py  # server_info and cwd tools
-├── tools_files.py # list_files, search, read_text, write_file, apply_patch registration
+├── tools_core.py  # server_info, cwd, and env_snapshot/env_diff tools
+├── tools_files.py # list_files, search, read_text, code_map_*, write_file, apply_patch registration
 ├── tools_git_shell.py # git_*, synchronous shell, serial Codex delegate registration
-├── tools_obsidian.py # optional obsidian_* proxy tool registration
 ├── config.py      # Env-var driven settings
 ├── oauth.py       # OAuth dynamic registration, PKCE, token store, metadata
 ├── http_compat.py # ChatGPT-compatible HTTP/OAuth/MCP compatibility layer
 ├── pathing.py     # Path resolution: relative -> absolute under WORKSPACE_ROOT
+├── envtools.py    # Read-only environment snapshots and inline snapshot diffs
+├── code_map.py    # Lightweight symbol/reference/import mapping
 ├── files.py       # list_files, read_text, write_file
 ├── search.py      # glob/regex/text search implementations
 ├── shell.py       # run_command subprocess helper
@@ -47,16 +48,19 @@ src/chatgpt_web_oauth_mcp/
 |---|---|
 | `server_info` | Inspect runtime config and available MCP tools |
 | `set_default_cwd` / `get_default_cwd` | Manage session default working directory |
+| `env_snapshot` / `env_diff` | Read-only runtime diagnostics and inline snapshot comparison |
 | `list_files` | List directory contents |
 | `search` | Glob, regex, literal text search, or batch search with `mode="sequential"` / `mode="parallel"`; parallel batches cap `max_concurrency` at 3 |
 | `read_text` | Single/batch text reader with pagination |
+| `code_map_symbols` / `code_map_references` / `code_map_imports` | Tiny read-only code map for definitions, textual references, and imports |
 | `write_file` | Create or overwrite a file, with dry-run support |
 | `apply_patch` | Structured patch editing for existing files |
 | `git_status` / `git_diff` / `git_commit` / `git_log` / `git_show` / `git_blame` | Structured git workflows |
+| `git_worktree_create` / `git_worktree_list` / `git_worktree_status` / `git_worktree_remove` | Tiny generic git worktree lifecycle |
 | `run_command` | Execute one shell command, or multiple commands with `mode="sequential"` or `mode="parallel"`; timeout is capped at 300s unless `force=true` is used after explicit user approval; parallel batches cap `max_concurrency` at 3 |
+| `job_start` / `job_status` / `job_tail` / `job_kill` | Tiny generic in-process background job runner with stdout/stderr logs under the state directory; no scheduler, resume, dependencies, or artifact tracking |
 | `delegate_task` | Run one serialized, bounded Codex execution slice; wait up to 300s by default, then return either the result or `status=running` with readable log paths while Codex continues |
 | `delegate_status` | Read-only active/recent delegate status list with server-generated `delegate_id` values and log paths; supports `watch_seconds` long-polling up to 300s |
-| `obsidian_*` tools | Optional Obsidian native MCP proxy tools; only registered when `CHATGPT_MCP_ENABLE_OBSIDIAN=1` |
 
 ## Key concepts
 

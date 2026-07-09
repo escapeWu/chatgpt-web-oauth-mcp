@@ -12,7 +12,13 @@ from chatgpt_web_oauth_mcp.executors import ExecutorRegistry, Invocation
 def test_run_codex_returns_synchronous_result(tmp_path: Path) -> None:
     registry = ExecutorRegistry(codex_command="python3 -c \"print('done')\"")
 
-    result = registry.run_codex(task="finish", cwd=tmp_path, timeout=5)
+    result = registry.run_codex(
+        task="finish",
+        cwd=tmp_path,
+        timeout=5,
+        model="gpt-5.5",
+        reasoning_effort="high",
+    )
 
     assert result["success"] is True
     assert result["status"] == "succeeded"
@@ -25,6 +31,8 @@ def test_run_codex_returns_synchronous_result(tmp_path: Path) -> None:
     assert "stdout" not in result
     assert "stderr" not in result
     assert result["output_omitted"] is True
+    assert result["model"] == "gpt-5.5"
+    assert result["reasoning_effort"] == "high"
     logs = result["logs"]
     assert Path(logs["log_dir"]).is_dir()
     assert Path(logs["prompt"]).read_text(encoding="utf-8")
@@ -32,6 +40,8 @@ def test_run_codex_returns_synchronous_result(tmp_path: Path) -> None:
     metadata = json.loads(Path(logs["metadata"]).read_text(encoding="utf-8"))
     assert metadata["delegate_id"] == result["delegate_id"]
     assert metadata["status"] == "succeeded"
+    assert metadata["model"] == "gpt-5.5"
+    assert metadata["reasoning_effort"] == "high"
     assert metadata["stdout_bytes"] >= 4
 
 
@@ -282,6 +292,33 @@ def test_run_codex_invalid_commit_mode_returns_structured_failure(tmp_path: Path
     assert "stderr" not in result
 
 
+def test_run_codex_invalid_reasoning_effort_returns_structured_failure(tmp_path: Path) -> None:
+    registry = ExecutorRegistry(codex_command="python3 -c \"print('should-not-run')\"")
+
+    result = registry.run_codex(
+        task="finish",
+        cwd=tmp_path,
+        timeout=5,
+        reasoning_effort="ultra",
+    )
+
+    assert result["success"] is False
+    assert result["status"] == "failed"
+    assert result["error"]["code"] == "unsupported_reasoning_effort"
+    assert result["error"]["allowed_reasoning_efforts"] == [
+        "default",
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    ]
+    assert "stdout" not in result
+    assert "stderr" not in result
+
+
 def test_run_codex_soft_timeout_returns_running_without_killing_process(tmp_path: Path) -> None:
     registry = ExecutorRegistry(
         codex_command="python3 -c \"import time; time.sleep(2)\""
@@ -377,13 +414,160 @@ def test_build_invocation_resolves_windows_codex_shim(tmp_path: Path, monkeypatc
         acceptance_criteria=[],
         verification_commands=[],
         commit_mode="allowed",
+        model="gpt-5.5",
+        reasoning_effort="xhigh",
     )
 
     assert invocation.use_shell is False
     assert invocation.args[0] == shim_path
-    assert invocation.args[1:4] == ["exec", "--dangerously-bypass-approvals-and-sandbox", "-C"]
+    assert invocation.args[1:6] == [
+        "exec",
+        "--model",
+        "gpt-5.5",
+        "-c",
+        'model_reasoning_effort="xhigh"',
+    ]
+    assert invocation.args[6:8] == [
+        "--dangerously-bypass-approvals-and-sandbox",
+        "-C",
+    ]
     assert invocation.args[-1] == "-"
     assert b"Fix Windows startup" in (invocation.stdin or b"")
+
+
+def test_build_invocation_omits_default_model_override(tmp_path: Path) -> None:
+    registry = ExecutorRegistry(codex_command="codex")
+
+    invocation = registry._build_invocation(
+        command="codex",
+        task="Use inherited model config",
+        goal=None,
+        cwd=tmp_path,
+        context_files=[],
+        acceptance_criteria=[],
+        verification_commands=[],
+        commit_mode="allowed",
+        model="default",
+    )
+
+    assert invocation.use_shell is False
+    assert "--model" not in invocation.args
+    assert "default" not in invocation.args
+
+
+def test_build_invocation_includes_model_without_reasoning_override(tmp_path: Path) -> None:
+    registry = ExecutorRegistry(codex_command="codex")
+
+    invocation = registry._build_invocation(
+        command="codex",
+        task="Use a specific model",
+        goal=None,
+        cwd=tmp_path,
+        context_files=[],
+        acceptance_criteria=[],
+        verification_commands=[],
+        commit_mode="allowed",
+        model="gpt-5.4-mini",
+    )
+
+    assert invocation.use_shell is False
+    assert invocation.args[1:4] == [
+        "exec",
+        "--model",
+        "gpt-5.4-mini",
+    ]
+    assert "-c" not in invocation.args
+
+
+def test_build_invocation_includes_reasoning_without_model_override(tmp_path: Path) -> None:
+    registry = ExecutorRegistry(codex_command="codex")
+
+    invocation = registry._build_invocation(
+        command="codex",
+        task="Use a specific reasoning effort",
+        goal=None,
+        cwd=tmp_path,
+        context_files=[],
+        acceptance_criteria=[],
+        verification_commands=[],
+        commit_mode="allowed",
+        reasoning_effort="xhigh",
+    )
+
+    assert invocation.use_shell is False
+    assert invocation.args[1:4] == [
+        "exec",
+        "-c",
+        'model_reasoning_effort="xhigh"',
+    ]
+    assert "--model" not in invocation.args
+
+
+def test_build_invocation_omits_default_reasoning_effort_override(tmp_path: Path) -> None:
+    registry = ExecutorRegistry(codex_command="codex")
+
+    invocation = registry._build_invocation(
+        command="codex",
+        task="Use inherited config",
+        goal=None,
+        cwd=tmp_path,
+        context_files=[],
+        acceptance_criteria=[],
+        verification_commands=[],
+        commit_mode="allowed",
+        reasoning_effort="default",
+    )
+
+    assert invocation.use_shell is False
+    assert "-c" not in invocation.args
+    assert not any(str(arg).startswith("model_reasoning_effort=") for arg in invocation.args)
+
+
+def test_build_invocation_omits_empty_model_override(tmp_path: Path) -> None:
+    registry = ExecutorRegistry(codex_command="codex")
+
+    invocation = registry._build_invocation(
+        command="codex",
+        task="Use inherited model config",
+        goal=None,
+        cwd=tmp_path,
+        context_files=[],
+        acceptance_criteria=[],
+        verification_commands=[],
+        commit_mode="allowed",
+        model="   ",
+    )
+
+    assert invocation.use_shell is False
+    assert "--model" not in invocation.args
+
+
+def test_build_invocation_omits_default_model_and_reasoning_overrides(tmp_path: Path) -> None:
+    registry = ExecutorRegistry(codex_command="codex")
+
+    invocation = registry._build_invocation(
+        command="codex",
+        task="Use inherited config",
+        goal=None,
+        cwd=tmp_path,
+        context_files=[],
+        acceptance_criteria=[],
+        verification_commands=[],
+        commit_mode="allowed",
+        model="default",
+        reasoning_effort="default",
+    )
+
+    assert invocation.use_shell is False
+    assert "--model" not in invocation.args
+    assert "-c" not in invocation.args
+    assert not any(str(arg).startswith("model_reasoning_effort=") for arg in invocation.args)
+    assert invocation.args[1:4] == [
+        "exec",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "-C",
+    ]
+    assert invocation.args[-1] == "-"
 
 
 def test_run_codex_decodes_utf8_process_output(tmp_path: Path, monkeypatch) -> None:

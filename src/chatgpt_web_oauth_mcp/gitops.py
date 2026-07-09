@@ -536,3 +536,291 @@ def git_blame(
         "ref": ref,
         "entries": entries,
     }
+
+
+def _resolve_worktree_path(path: str, *, cwd: Path) -> Path:
+    raw = Path(path).expanduser()
+    if raw.is_absolute():
+        return raw.resolve(strict=False)
+    return (cwd / raw).resolve(strict=False)
+
+
+def _parse_worktree_list(output: str) -> list[dict[str, object]]:
+    entries: list[dict[str, object]] = []
+    current: dict[str, object] = {}
+
+    def flush() -> None:
+        nonlocal current
+        if current:
+            current.setdefault("branch", None)
+            current.setdefault("branch_ref", None)
+            current.setdefault("commit", None)
+            current.setdefault("detached", False)
+            current.setdefault("bare", False)
+            current.setdefault("locked", False)
+            current.setdefault("prunable", False)
+            entries.append(current)
+            current = {}
+
+    for line in output.splitlines():
+        if not line:
+            flush()
+            continue
+        key, _, value = line.partition(" ")
+        if key == "worktree":
+            flush()
+            current["path"] = value
+            continue
+        if key == "HEAD":
+            current["commit"] = value
+            continue
+        if key == "branch":
+            current["branch_ref"] = value
+            current["branch"] = value.removeprefix("refs/heads/")
+            continue
+        if key in {"detached", "bare", "locked", "prunable"}:
+            current[key] = True
+            if value:
+                current[f"{key}_reason"] = value
+            continue
+        if key:
+            current[key] = value or True
+    flush()
+    return entries
+
+
+def _worktree_list_payload(*, cwd: Path, repo_root: Path) -> dict[str, object]:
+    result = _run_git(["worktree", "list", "--porcelain"], cwd=repo_root)
+    if result.returncode != 0:
+        return _error(
+            "git_worktree_list_failed",
+            result.stderr.strip() or "git worktree list failed.",
+            cwd=str(cwd),
+        )
+    worktrees = _parse_worktree_list(result.stdout)
+    return {
+        "success": True,
+        "cwd": str(cwd),
+        "repo_root": str(repo_root),
+        "worktrees": worktrees,
+    }
+
+
+def _find_worktree(entries: list[dict[str, object]], target: Path) -> dict[str, object] | None:
+    target_resolved = target.resolve(strict=False)
+    for entry in entries:
+        path_value = entry.get("path")
+        if not isinstance(path_value, str):
+            continue
+        if Path(path_value).resolve(strict=False) == target_resolved:
+            return entry
+    return None
+
+
+def git_worktree_list(*, cwd: Path) -> dict[str, object]:
+    repo_info = _require_repo(cwd)
+    if isinstance(repo_info, dict):
+        return repo_info
+    repo_root, _branch = repo_info
+    return _worktree_list_payload(cwd=cwd, repo_root=repo_root)
+
+
+def git_worktree_create(
+    *,
+    cwd: Path,
+    path: str,
+    base_ref: str = "HEAD",
+    mode: str = "clean",
+    branch: str | None = None,
+) -> dict[str, object]:
+    repo_info = _require_repo(cwd)
+    if isinstance(repo_info, dict):
+        return repo_info
+    repo_root, _branch = repo_info
+
+    if mode not in {"clean", "detached"}:
+        return _error(
+            "unsupported_worktree_mode",
+            "git_worktree_create supports mode='clean' and mode='detached' only.",
+            cwd=str(cwd),
+            mode=mode,
+        )
+    if mode == "detached" and branch:
+        return _error(
+            "invalid_arguments",
+            "branch can only be used with mode='clean'.",
+            cwd=str(cwd),
+            mode=mode,
+            branch=branch,
+        )
+
+    target = _resolve_worktree_path(path, cwd=cwd)
+    args = ["worktree", "add"]
+    branch_name: str | None = None
+    if mode == "detached":
+        args.append("--detach")
+    else:
+        branch_name = branch or target.name
+        args.extend(["-b", branch_name])
+    args.extend([str(target), base_ref])
+
+    result = _run_git(args, cwd=repo_root)
+    if result.returncode != 0:
+        return _error(
+            "git_worktree_create_failed",
+            result.stderr.strip() or result.stdout.strip() or "git worktree add failed.",
+            cwd=str(cwd),
+            repo_root=str(repo_root),
+            path=str(target),
+            base_ref=base_ref,
+            mode=mode,
+            branch=branch_name,
+        )
+
+    list_result = _worktree_list_payload(cwd=cwd, repo_root=repo_root)
+    entry = None
+    if list_result.get("success") is True:
+        entry = _find_worktree(list_result["worktrees"], target)  # type: ignore[arg-type]
+
+    return {
+        "success": True,
+        "cwd": str(cwd),
+        "repo_root": str(repo_root),
+        "path": str(target),
+        "base_ref": base_ref,
+        "mode": mode,
+        "branch": branch_name,
+        "worktree": entry,
+    }
+
+
+def _worktree_status_entry(entry: dict[str, object]) -> dict[str, object]:
+    path_value = entry.get("path")
+    if not isinstance(path_value, str):
+        return {**entry, "status": _error("worktree_path_missing", "Worktree entry has no path.")}
+    path = Path(path_value)
+    if entry.get("bare") is True:
+        return {**entry, "status": None, "clean": None}
+    status = git_status(cwd=path)
+    payload = {**entry, "status": status}
+    if status.get("success") is True:
+        payload["clean"] = status.get("clean")
+    return payload
+
+
+def git_worktree_status(*, cwd: Path, path: str | None = None) -> dict[str, object]:
+    repo_info = _require_repo(cwd)
+    if isinstance(repo_info, dict):
+        return repo_info
+    repo_root, _branch = repo_info
+
+    list_result = _worktree_list_payload(cwd=cwd, repo_root=repo_root)
+    if list_result.get("success") is not True:
+        return list_result
+    entries = list_result["worktrees"]  # type: ignore[assignment]
+
+    if path is None:
+        statuses = [_worktree_status_entry(entry) for entry in entries]  # type: ignore[arg-type]
+        return {
+            "success": True,
+            "cwd": str(cwd),
+            "repo_root": str(repo_root),
+            "worktrees": statuses,
+        }
+
+    target = _resolve_worktree_path(path, cwd=cwd)
+    entry = _find_worktree(entries, target)  # type: ignore[arg-type]
+    if entry is None:
+        return _error(
+            "worktree_not_found",
+            "Path is not a registered git worktree.",
+            cwd=str(cwd),
+            repo_root=str(repo_root),
+            path=str(target),
+        )
+
+    status_entry = _worktree_status_entry(entry)
+    status = status_entry.get("status")
+    if not isinstance(status, dict) or status.get("success") is not True:
+        return _error(
+            "git_worktree_status_failed",
+            "Could not read git status for worktree.",
+            cwd=str(cwd),
+            repo_root=str(repo_root),
+            path=str(target),
+            status=status,
+        )
+    return {
+        "success": True,
+        "cwd": str(cwd),
+        "repo_root": str(repo_root),
+        "path": str(target),
+        "worktree": entry,
+        "status": status,
+        "clean": status.get("clean"),
+    }
+
+
+def git_worktree_remove(*, cwd: Path, path: str, force: bool = False) -> dict[str, object]:
+    repo_info = _require_repo(cwd)
+    if isinstance(repo_info, dict):
+        return repo_info
+    repo_root, _branch = repo_info
+
+    target = _resolve_worktree_path(path, cwd=cwd)
+    list_result = _worktree_list_payload(cwd=cwd, repo_root=repo_root)
+    if list_result.get("success") is not True:
+        return list_result
+    entry = _find_worktree(list_result["worktrees"], target)  # type: ignore[arg-type]
+    if entry is None:
+        return _error(
+            "worktree_not_found",
+            "Path is not a registered git worktree.",
+            cwd=str(cwd),
+            repo_root=str(repo_root),
+            path=str(target),
+        )
+
+    status_result = git_status(cwd=target)
+    if status_result.get("success") is not True:
+        return _error(
+            "git_worktree_status_failed",
+            "Could not read git status for worktree.",
+            cwd=str(cwd),
+            repo_root=str(repo_root),
+            path=str(target),
+            status=status_result,
+        )
+    if not force and status_result.get("clean") is not True:
+        return _error(
+            "worktree_dirty",
+            "Worktree has uncommitted changes; pass force=true to remove it.",
+            cwd=str(cwd),
+            repo_root=str(repo_root),
+            path=str(target),
+            status=status_result,
+        )
+
+    args = ["worktree", "remove"]
+    if force:
+        args.append("--force")
+    args.append(str(target))
+    result = _run_git(args, cwd=repo_root)
+    if result.returncode != 0:
+        return _error(
+            "git_worktree_remove_failed",
+            result.stderr.strip() or result.stdout.strip() or "git worktree remove failed.",
+            cwd=str(cwd),
+            repo_root=str(repo_root),
+            path=str(target),
+            force=force,
+        )
+
+    return {
+        "success": True,
+        "cwd": str(cwd),
+        "repo_root": str(repo_root),
+        "path": str(target),
+        "force": force,
+        "removed": True,
+    }

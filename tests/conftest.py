@@ -7,5 +7,5 @@ import os
 # live ChatGPT connector. Unit tests must start from deterministic defaults and
 # should opt into auth modes explicitly via monkeypatch/module attributes.
 for key in list(os.environ):
-    if key.startswith("CHATGPT_MCP_") or key.startswith("OBSIDIAN_"):
+    if key.startswith("CHATGPT_MCP_"):
         os.environ.pop(key, None)

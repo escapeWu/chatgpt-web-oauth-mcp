@@ -15,19 +15,11 @@ from .config import (
     COMMAND_TIMEOUT,
     DEBUG_MCP_LOGGING,
     DELEGATE_TIMEOUT,
-    ENABLE_OBSIDIAN,
     GRACEFUL_SHUTDOWN_SECONDS,
     HOST,
     OAUTH_LOGIN_TOKEN,
     OAUTH_SCOPES,
     OAUTH_TOKEN_TTL_SECONDS,
-    OBSIDIAN_API_KEY,
-    OBSIDIAN_HOST,
-    OBSIDIAN_MCP_URL,
-    OBSIDIAN_PORT,
-    OBSIDIAN_PROTOCOL,
-    OBSIDIAN_TIMEOUT_SECONDS,
-    OBSIDIAN_VERIFY_SSL,
     PORT,
     PUBLIC_BASE_URL,
     STATE_DIR,
@@ -37,17 +29,11 @@ from .config import (
 from .executors import ExecutorRegistry
 from .http_compat import build_http_compat_app
 from .oauth import OAuthRuntimeConfig
-from .obsidian import (
-    ObsidianMCPConfig,
-    call_native_tool as obsidian_call_native_tool,
-    list_native_tools as obsidian_list_native_tools,
-    proxy_error as obsidian_proxy_error,
-)
+from .shell import JobRegistry
 from .tool_context import ToolContext
 from .tools_core import register_core_tools
 from .tools_files import register_file_tools
 from .tools_git_shell import register_git_shell_tools
-from .tools_obsidian import register_obsidian_tools
 
 
 # Bearer auth lives exclusively in the HTTP layer (http_compat.HTTPBearerAuthMiddleware)
@@ -55,13 +41,20 @@ from .tools_obsidian import register_obsidian_tools
 # protocol-layer middleware was redundant and has been removed.
 
 registry = ExecutorRegistry(codex_command=CODEX_COMMAND)
+job_registry = JobRegistry()
 
 MCP_INSTRUCTIONS = (
     "Architecture: ChatGPT Web is the architect/manager/reviewer; this local MCP server exposes "
     "scoped local tools; delegate_task is only a single-task Codex executor. Use direct tools first "
     "for repo inspection, planning, patching, short commands, git checks, and verification. "
     "Use search/read_text for focused or batched discovery and reading, apply_patch/write_file for edits, "
-    "run_command for short single or batched shell work, and git_* only inside a git repository. "
+    "env_snapshot/env_diff for read-only runtime diagnostics. Before edits or reviews, use "
+    "code_map_symbols to find definitions, code_map_references to estimate impact, and "
+    "code_map_imports to inspect module boundaries; use those results to narrow "
+    "delegate_task files_in_scope when delegating. code_map_* is lightweight and not for "
+    "precise rename, type inference, or call graph analysis. "
+    "run_command for short single or batched shell work, job_start/job_status/job_tail/job_kill for "
+    "generic background local jobs, and git_* only inside a git repository. "
     "Use delegate_task only for one bounded Codex Execution Prompt when direct tools are insufficient; "
     "it runs one serialized Codex delegate and blocks up to 300 seconds by default. If it returns "
     "status=running, call delegate_task again to continue waiting and use read_text on returned "
@@ -103,18 +96,6 @@ def _current_debug_mcp_logging() -> bool:
     return bool(globals().get("DEBUG_MCP_LOGGING", False))
 
 
-def _current_obsidian_config() -> ObsidianMCPConfig:
-    return ObsidianMCPConfig(
-        api_key=globals().get("OBSIDIAN_API_KEY", "") or "",
-        host=globals().get("OBSIDIAN_HOST", "127.0.0.1") or "127.0.0.1",
-        port=int(globals().get("OBSIDIAN_PORT", 27124) or 27124),
-        protocol=globals().get("OBSIDIAN_PROTOCOL", "https") or "https",
-        url=globals().get("OBSIDIAN_MCP_URL", "") or "",
-        verify_ssl=bool(globals().get("OBSIDIAN_VERIFY_SSL", False)),
-        timeout_seconds=int(globals().get("OBSIDIAN_TIMEOUT_SECONDS", 10) or 10),
-    )
-
-
 def _global_value(name: str, default: Any = None) -> Any:
     return globals().get(name, default)
 
@@ -122,14 +103,12 @@ def _global_value(name: str, default: Any = None) -> Any:
 _tool_context = ToolContext(
     global_value=_global_value,
     current_oauth_config=_current_oauth_config,
-    current_obsidian_config=_current_obsidian_config,
 )
 
 _tool_exports: dict[str, object] = {}
 _tool_exports.update(register_core_tools(mcp, _tool_context))
 _tool_exports.update(register_file_tools(mcp, _tool_context))
 _tool_exports.update(register_git_shell_tools(mcp, _tool_context))
-_tool_exports.update(register_obsidian_tools(mcp, _tool_context))
 globals().update(_tool_exports)
 
 

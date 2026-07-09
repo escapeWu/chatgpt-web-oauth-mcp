@@ -18,6 +18,9 @@ from pathlib import PureWindowsPath
 
 
 ALLOWED_COMMIT_MODES = {"allowed", "required", "forbidden"}
+ALLOWED_REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+DEFAULT_MODEL = "default"
+DEFAULT_REASONING_EFFORT = "default"
 IS_WINDOWS = os.name == "nt"
 TIMEOUT_EXIT_CODE = -1
 DEFAULT_DELEGATE_WAIT_SECONDS = 300.0
@@ -67,6 +70,20 @@ def _command_available(command: str | None) -> bool:
     if Path(binary).exists():
         return True
     return shutil.which(binary) is not None
+
+
+def _normalize_reasoning_effort(reasoning_effort: str | None) -> str | None:
+    normalized = (reasoning_effort or "").strip().lower()
+    if not normalized or normalized == DEFAULT_REASONING_EFFORT:
+        return None
+    return normalized
+
+
+def _normalize_model(model: str | None) -> str | None:
+    normalized = (model or "").strip()
+    if not normalized or normalized.lower() == DEFAULT_MODEL:
+        return None
+    return normalized
 
 
 def _result_summary(status: str, error: dict[str, object] | None) -> str:
@@ -251,6 +268,8 @@ def _delegate_request_fingerprint(
     done_means: list[str] | None,
     verification_commands: list[str] | None,
     commit_mode: str,
+    model: str | None,
+    reasoning_effort: str | None,
     output_schema: dict[str, object] | None,
     parse_structured_output: bool,
 ) -> str:
@@ -266,6 +285,8 @@ def _delegate_request_fingerprint(
         "done_means": done_means or [],
         "verification_commands": verification_commands or [],
         "commit_mode": commit_mode,
+        "model": model,
+        "reasoning_effort": reasoning_effort,
         "output_schema": output_schema or None,
         "parse_structured_output": parse_structured_output,
     }
@@ -317,6 +338,8 @@ class ActiveDelegate:
     cwd: Path
     timeout: int
     output_schema: dict[str, object] | None
+    model: str | None
+    reasoning_effort: str | None
     process: subprocess.Popen[bytes] | None
     completed_event: threading.Event
     started_at: float
@@ -359,12 +382,24 @@ class ExecutorRegistry:
         done_means: list[str] | None = None,
         verification_commands: list[str] | None = None,
         commit_mode: str = "allowed",
+        model: str | None = None,
+        reasoning_effort: str | None = None,
         output_schema: dict[str, object] | None = None,
         parse_structured_output: bool = True,
     ) -> dict[str, object]:
         normalized_task = (task or "").strip()
         normalized_goal = (goal or "").strip()
         normalized_task_id = (task_id or "").strip() or None
+        normalized_model = _normalize_model(model)
+        normalized_reasoning_effort = _normalize_reasoning_effort(reasoning_effort)
+        if normalized_reasoning_effort is not None and normalized_reasoning_effort not in ALLOWED_REASONING_EFFORTS:
+            return _delegate_argument_error(
+                cwd=cwd,
+                timeout=timeout,
+                code="unsupported_reasoning_effort",
+                message=f"Unsupported reasoning_effort: {reasoning_effort}",
+                details={"allowed_reasoning_efforts": [DEFAULT_REASONING_EFFORT, *ALLOWED_REASONING_EFFORTS]},
+            )
         request_fingerprint = None
         if normalized_task or normalized_goal:
             request_fingerprint = _delegate_request_fingerprint(
@@ -379,6 +414,8 @@ class ExecutorRegistry:
                 done_means=done_means,
                 verification_commands=verification_commands,
                 commit_mode=commit_mode,
+                model=normalized_model,
+                reasoning_effort=normalized_reasoning_effort,
                 output_schema=output_schema,
                 parse_structured_output=parse_structured_output,
             )
@@ -461,6 +498,8 @@ class ExecutorRegistry:
             done_means=done_means or [],
             verification_commands=verification_commands or [],
             commit_mode=commit_mode,
+            model=normalized_model,
+            reasoning_effort=normalized_reasoning_effort,
             output_schema=output_schema or None,
             parse_structured_output=parse_structured_output,
             lock_wait_seconds=lock_wait_seconds,
@@ -483,6 +522,8 @@ class ExecutorRegistry:
                     done_means=done_means,
                     verification_commands=verification_commands,
                     commit_mode=commit_mode,
+                    model=model,
+                    reasoning_effort=reasoning_effort,
                     output_schema=output_schema,
                     parse_structured_output=parse_structured_output,
                 )
@@ -545,6 +586,10 @@ class ExecutorRegistry:
             "log_read_hint": _log_read_hint(active.log_paths),
             "output_omitted": True,
         }
+        if active.model is not None:
+            payload["model"] = active.model
+        if active.reasoning_effort is not None:
+            payload["reasoning_effort"] = active.reasoning_effort
         if result:
             for key in [
                 "exit_code",
@@ -740,6 +785,8 @@ class ExecutorRegistry:
         done_means: list[str],
         verification_commands: list[str],
         commit_mode: str,
+        model: str | None,
+        reasoning_effort: str | None,
         output_schema: dict[str, object] | None,
         parse_structured_output: bool,
         lock_wait_seconds: float,
@@ -768,6 +815,8 @@ class ExecutorRegistry:
                     done_means=done_means,
                     verification_commands=verification_commands,
                     commit_mode=commit_mode,
+                    model=model,
+                    reasoning_effort=reasoning_effort,
                     output_schema=output_schema,
                     parse_structured_output=parse_structured_output,
                     lock_wait_seconds=lock_wait_seconds,
@@ -786,6 +835,8 @@ class ExecutorRegistry:
                     "cwd": str(cwd),
                     "timeout": timeout,
                     "task_id": task_id,
+                    "model": model,
+                    "reasoning_effort": reasoning_effort,
                     "request_fingerprint": request_fingerprint,
                     "started_at_monotonic": time.monotonic(),
                 },
@@ -795,6 +846,8 @@ class ExecutorRegistry:
                 cwd=cwd,
                 timeout=timeout,
                 output_schema=output_schema,
+                model=model,
+                reasoning_effort=reasoning_effort,
                 process=None,
                 completed_event=completed,
                 started_at=time.monotonic(),
@@ -818,6 +871,8 @@ class ExecutorRegistry:
                 delegate_id=active.delegate_id,
                 log_paths=active.log_paths,
                 task_id=task_id,
+                model=model,
+                reasoning_effort=reasoning_effort,
                 request_fingerprint=request_fingerprint,
                 error={"code": "process_start_failed", "message": str(exc)},
             )
@@ -847,6 +902,8 @@ class ExecutorRegistry:
         done_means: list[str],
         verification_commands: list[str],
         commit_mode: str,
+        model: str | None,
+        reasoning_effort: str | None,
         output_schema: dict[str, object] | None,
         parse_structured_output: bool,
         lock_wait_seconds: float,
@@ -867,6 +924,8 @@ class ExecutorRegistry:
             command=self.codex_command or "",
             cwd=cwd,
             prompt=prompt,
+            model=model,
+            reasoning_effort=reasoning_effort,
         )
         delegate_id = uuid.uuid4().hex[:12]
         log_paths = _create_delegate_logs(delegate_id)
@@ -879,6 +938,8 @@ class ExecutorRegistry:
                 "cwd": str(cwd),
                 "timeout": timeout,
                 "commit_mode": commit_mode,
+                "model": model,
+                "reasoning_effort": reasoning_effort,
                 "task_id": task_id,
                 "request_fingerprint": request_fingerprint,
                 "files_in_scope": files_in_scope,
@@ -909,6 +970,8 @@ class ExecutorRegistry:
                 cwd=cwd,
                 timeout=timeout,
                 output_schema=output_schema,
+                model=model,
+                reasoning_effort=reasoning_effort,
                 process=None,
                 completed_event=completed,
                 started_at=started_at,
@@ -932,6 +995,8 @@ class ExecutorRegistry:
                 delegate_id=delegate_id,
                 log_paths=log_paths,
                 task_id=task_id,
+                model=model,
+                reasoning_effort=reasoning_effort,
                 request_fingerprint=request_fingerprint,
                 error={"code": "process_start_failed", "message": str(exc)},
             )
@@ -944,6 +1009,8 @@ class ExecutorRegistry:
                     "cwd": str(cwd),
                     "timeout": timeout,
                     "task_id": task_id,
+                    "model": model,
+                    "reasoning_effort": reasoning_effort,
                     "request_fingerprint": request_fingerprint,
                     "logs": log_paths.as_payload(),
                 },
@@ -961,6 +1028,8 @@ class ExecutorRegistry:
             cwd=cwd,
             timeout=timeout,
             output_schema=output_schema,
+            model=model,
+            reasoning_effort=reasoning_effort,
             process=process,
             completed_event=threading.Event(),
             started_at=started_at,
@@ -976,16 +1045,23 @@ class ExecutorRegistry:
         command: str,
         cwd: Path,
         prompt: str,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> Invocation:
         parts = _resolve_delegate_command_parts(command)
         if parts and _binary_name(parts[0]) == "codex":
-            args = [
-                *parts,
-                "exec",
-                "--dangerously-bypass-approvals-and-sandbox",
-                "-C",
-                str(cwd),
-            ]
+            args = [*parts, "exec"]
+            if model:
+                args.extend(["--model", model])
+            if reasoning_effort:
+                args.extend(["-c", f"model_reasoning_effort={json.dumps(reasoning_effort)}"])
+            args.extend(
+                [
+                    "--dangerously-bypass-approvals-and-sandbox",
+                    "-C",
+                    str(cwd),
+                ]
+            )
             if not (cwd / ".git").exists():
                 args.append("--skip-git-repo-check")
             args.append("-")
@@ -1084,6 +1160,8 @@ class ExecutorRegistry:
             delegate_id=active.delegate_id,
             log_paths=active.log_paths,
             task_id=active.request_task_id,
+            model=active.model,
+            reasoning_effort=active.reasoning_effort,
             request_fingerprint=active.request_fingerprint,
             error=error,
             soft_timeout_elapsed=soft_timeout_elapsed,
@@ -1108,6 +1186,8 @@ class ExecutorRegistry:
             "cwd": str(active.cwd),
             "timeout": active.timeout,
             "task_id": active.request_task_id,
+            "model": active.model,
+            "reasoning_effort": active.reasoning_effort,
             "request_fingerprint": active.request_fingerprint,
             "elapsed_seconds": round(time.monotonic() - active.started_at, 3),
             "stdout_bytes": active.stdout_bytes,
@@ -1181,6 +1261,8 @@ class ExecutorRegistry:
             "cwd": str(active.cwd),
             "timeout": active.timeout,
             "task_id": active.request_task_id,
+            "model": active.model,
+            "reasoning_effort": active.reasoning_effort,
             "request_fingerprint": active.request_fingerprint,
             "duration_seconds": round(duration_seconds, 3),
             "stdout_bytes": active.stdout_bytes,
@@ -1238,6 +1320,10 @@ class ExecutorRegistry:
             "message": "Codex delegate is still running. Call delegate_task again to continue waiting.",
             "next": "call delegate_task again without task/goal, or repeat the same delegate_task call",
         }
+        if active.model is not None:
+            payload["model"] = active.model
+        if active.reasoning_effort is not None:
+            payload["reasoning_effort"] = active.reasoning_effort
         if request_conflict:
             payload.update(
                 {
@@ -1270,6 +1356,8 @@ class ExecutorRegistry:
         delegate_id: str,
         log_paths: DelegateLogPaths,
         task_id: str | None = None,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
         request_fingerprint: str | None = None,
         error: dict[str, object] | None = None,
         soft_timeout_elapsed: bool = False,
@@ -1299,6 +1387,10 @@ class ExecutorRegistry:
         }
         if task_id is not None:
             payload["task_id"] = task_id
+        if model is not None:
+            payload["model"] = model
+        if reasoning_effort is not None:
+            payload["reasoning_effort"] = reasoning_effort
         if request_fingerprint is not None:
             payload["request_fingerprint"] = request_fingerprint
         if error is not None:
@@ -1331,6 +1423,8 @@ class ExecutorRegistry:
         done_means: list[str] | None = None,
         verification_commands: list[str] | None = None,
         commit_mode: str,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> Invocation:
         prompt = self._build_prompt(
             task=task,
@@ -1344,20 +1438,13 @@ class ExecutorRegistry:
             verification_commands=verification_commands or [],
             commit_mode=commit_mode,
         )
-        parts = _resolve_delegate_command_parts(command)
-        if parts and _binary_name(parts[0]) == "codex":
-            args = [
-                *parts,
-                "exec",
-                "--dangerously-bypass-approvals-and-sandbox",
-                "-C",
-                str(cwd),
-            ]
-            if not (cwd / ".git").exists():
-                args.append("--skip-git-repo-check")
-            args.append("-")
-            return Invocation(args=args, use_shell=False, stdin=prompt.encode("utf-8"))
-        return Invocation(args=command, use_shell=True)
+        return self._build_invocation_from_prompt(
+            command=command,
+            cwd=cwd,
+            prompt=prompt,
+            model=_normalize_model(model),
+            reasoning_effort=_normalize_reasoning_effort(reasoning_effort),
+        )
 
     def _build_prompt(
         self,

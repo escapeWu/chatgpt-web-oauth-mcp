@@ -45,7 +45,6 @@ class ToolContext:
 
     global_value: Callable[[str, Any], Any]
     current_oauth_config: Callable[[], Any]
-    current_obsidian_config: Callable[[], Any]
 
     def _get(self, name: str, default: Any = None) -> Any:
         return self.global_value(name, default)
@@ -87,25 +86,9 @@ class ToolContext:
         return self._get("CODEX_COMMAND")
 
     @property
-    def enable_obsidian(self) -> bool:
-        return bool(self._get("ENABLE_OBSIDIAN", False))
-
-    @property
-    def obsidian_api_key(self) -> str:
-        return str(self._get("OBSIDIAN_API_KEY", "") or "")
-
-    @property
     def registry(self) -> Any:
         return self._get("registry")
 
     @property
-    def obsidian_call_native_tool(self) -> Callable[..., Any]:
-        return self._get("obsidian_call_native_tool")
-
-    @property
-    def obsidian_list_native_tools(self) -> Callable[..., Any]:
-        return self._get("obsidian_list_native_tools")
-
-    @property
-    def obsidian_proxy_error(self) -> Callable[..., dict[str, object]]:
-        return self._get("obsidian_proxy_error")
+    def job_registry(self) -> Any:
+        return self._get("job_registry")

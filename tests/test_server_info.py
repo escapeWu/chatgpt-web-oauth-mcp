@@ -35,16 +35,26 @@ def test_server_info_reports_metadata_and_tools() -> None:
     assert payload["routing_contract"]["codex_delegate_role"] == "single_bounded_execution_slice"
     tools = payload["tools"]
     assert isinstance(tools, list)
+    assert "obsidian_proxy" not in payload
     # Spot-check a handful of must-have tools from each module.
     for name in [
         "server_info",
+        "env_snapshot",
+        "env_diff",
         "search",
         "read_text",
+        "code_map_symbols",
+        "code_map_references",
+        "code_map_imports",
         "run_command",
         "apply_patch",
         "git_status",
         "git_show",
         "git_blame",
+        "git_worktree_create",
+        "git_worktree_list",
+        "git_worktree_status",
+        "git_worktree_remove",
         "delegate_task",
         "delegate_status",
     ]:
@@ -64,4 +74,5 @@ def test_server_info_reports_metadata_and_tools() -> None:
         assert name not in tools, f"did not expect removed tool {name}"
     for removed in ["search_files", "glob_files", "grep_files", "read_file", "read_files", "replace_in_file"]:
         assert removed not in tools, f"did not expect legacy alias tool {removed}"
+    assert not [name for name in tools if name.startswith("obsidian_")]
     assert payload["tool_count"] == len(tools)

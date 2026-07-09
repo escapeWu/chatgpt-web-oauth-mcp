@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
+from .code_map import code_map_imports as code_map_imports_impl
+from .code_map import code_map_references as code_map_references_impl
+from .code_map import code_map_symbols as code_map_symbols_impl
 from .files import list_files as list_files_impl
 from .files import read_file as read_file_impl
 from .files import read_files as read_files_impl
@@ -466,6 +469,99 @@ def register_file_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         return result
 
     @mcp.tool(
+        name="code_map_symbols",
+        title="Code Map Symbols",
+        annotations=READ_ONLY_TOOL,
+        description=(
+            "Scan a path for lightweight symbol definitions. Python uses ast for classes, "
+            "functions, methods, and async functions; TypeScript/JavaScript use small regex "
+            "patterns for classes, functions, and const definitions. Use before edits or "
+            "reviews to find implementation entry points and candidate files_in_scope. "
+            "This is not an LSP."
+        ),
+    )
+    def code_map_symbols(
+        path: Annotated[
+            str,
+            Field(description="File or directory to scan. Relative paths resolve from workspace root."),
+        ] = ".",
+        language: Annotated[
+            Literal["python", "typescript", "javascript"],
+            Field(description="Source language to scan: python, typescript, or javascript."),
+        ] = "python",
+        limit: Annotated[
+            int,
+            Field(description="Maximum number of symbols to return.", ge=1),
+        ] = 500,
+    ) -> dict[str, object]:
+        target = resolve_path(path, ctx.workspace_root)
+        return code_map_symbols_impl(path=target, language=language, limit=limit)
+
+    @mcp.tool(
+        name="code_map_references",
+        title="Code Map References",
+        annotations=READ_ONLY_TOOL,
+        description=(
+            "Find bounded text references for a symbol under a path using identifier word "
+            "boundaries. Results include file, line, and text snippets; matches are textual, "
+            "not AST-precise references. Use before changing a function/class to estimate "
+            "impact; definition lines may also appear."
+        ),
+    )
+    def code_map_references(
+        symbol: Annotated[
+            str,
+            Field(description="Identifier or symbol text to search for using word-boundary matching."),
+        ],
+        path: Annotated[
+            str,
+            Field(description="File or directory to search. Relative paths resolve from workspace root."),
+        ] = ".",
+        glob: Annotated[
+            str | None,
+            Field(description="Optional file glob filter such as '*.py' or '*.ts'."),
+        ] = "*.py",
+        limit: Annotated[
+            int,
+            Field(description="Maximum number of references to return.", ge=1),
+        ] = 200,
+    ) -> dict[str, object]:
+        target = resolve_path(path, ctx.workspace_root)
+        return code_map_references_impl(
+            path=target,
+            symbol=symbol,
+            glob_pattern=glob,
+            limit=limit,
+        )
+
+    @mcp.tool(
+        name="code_map_imports",
+        title="Code Map Imports",
+        annotations=READ_ONLY_TOOL,
+        description=(
+            "Extract lightweight import relationships from a file or directory. Python uses ast; "
+            "TypeScript/JavaScript use regex for import-from, side-effect imports, and require(). "
+            "Use during review or refactors to inspect module boundaries and dependency direction."
+        ),
+    )
+    def code_map_imports(
+        path: Annotated[
+            str,
+            Field(description="File or directory to scan. Relative paths resolve from workspace root."),
+        ] = ".",
+        language: Annotated[
+            Literal["python", "typescript", "javascript"],
+            Field(description="Source language to scan: python, typescript, or javascript."),
+        ] = "python",
+        limit: Annotated[
+            int,
+            Field(description="Maximum number of per-file import entries to return.", ge=1),
+        ] = 500,
+    ) -> dict[str, object]:
+        target = resolve_path(path, ctx.workspace_root)
+        return code_map_imports_impl(path=target, language=language, limit=limit)
+
+    @mcp.tool(
         name="write_file",
         title="Write File",
         annotations=LOCAL_WRITE_TOOL,
@@ -516,6 +612,9 @@ def register_file_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         "list_files": list_files,
         "search": search,
         "read_text": read_text,
+        "code_map_symbols": code_map_symbols,
+        "code_map_references": code_map_references,
+        "code_map_imports": code_map_imports,
         "write_file": write_file,
         "apply_patch": apply_patch,
     }

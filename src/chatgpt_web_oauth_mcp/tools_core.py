@@ -5,7 +5,9 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from . import session
-from .pathing import resolve_path
+from .envtools import env_diff as env_diff_impl
+from .envtools import env_snapshot as env_snapshot_impl
+from .pathing import resolve_cwd, resolve_path
 from .tool_context import LOCAL_STATE_TOOL, READ_ONLY_TOOL, ToolContext
 
 
@@ -70,13 +72,6 @@ def register_core_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
                 "raw_output": "stdout/stderr are stored in logs and not inlined in completed responses",
                 "status_recovery": "use delegate_status to list active/recent server-generated delegate_id values",
                 "status_monitor": "delegate_status supports watch_seconds up to 300 and polls every 5s by default",
-            },
-            "obsidian_proxy": {
-                "enabled": ctx.enable_obsidian,
-                "configured": bool(ctx.obsidian_api_key.strip()),
-                "mcp_url": ctx.current_obsidian_config().mcp_url,
-                "mode": "native_mcp_proxy",
-                "tool_prefix": "obsidian_",
             },
             "tools": tools,
             "tool_count": len(tools),
@@ -159,8 +154,55 @@ def register_core_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             "source": "session" if session_cwd else "workspace_root",
         }
 
+    @mcp.tool(
+        name="env_snapshot",
+        title="Environment Snapshot",
+        annotations=READ_ONLY_TOOL,
+        description=(
+            "Collect a small read-only environment snapshot for cwd: platform, Python runtime, "
+            "git, Node/npm, Java, common dependency/config file hashes, and optionally bounded "
+            "pip freeze output. Does not source shell profiles, activate venvs, install packages, "
+            "or modify the local environment."
+        ),
+    )
+    def env_snapshot(
+        cwd: Annotated[
+            str | None,
+            Field(description="Working directory to inspect. Defaults to the session cwd or workspace root."),
+        ] = None,
+        include_packages: Annotated[
+            bool,
+            Field(description="When true, include bounded `python -m pip freeze` output for the server Python."),
+        ] = False,
+    ) -> dict[str, object]:
+        resolved_cwd = resolve_cwd(cwd, ctx.workspace_root)
+        return env_snapshot_impl(cwd=resolved_cwd, include_packages=include_packages)
+
+    @mcp.tool(
+        name="env_diff",
+        title="Environment Diff",
+        annotations=READ_ONLY_TOOL,
+        description=(
+            "Compare two inline env_snapshot-like JSON objects and return changed nested keys "
+            "using dot-path notation. This tool does not read snapshot files from disk."
+        ),
+    )
+    def env_diff(
+        left: Annotated[
+            dict[str, Any],
+            Field(description="Left environment snapshot object to compare."),
+        ],
+        right: Annotated[
+            dict[str, Any],
+            Field(description="Right environment snapshot object to compare."),
+        ],
+    ) -> dict[str, object]:
+        return env_diff_impl(left=left, right=right)
+
     return {
         "server_info": server_info,
         "set_default_cwd": set_default_cwd,
         "get_default_cwd": get_default_cwd,
+        "env_snapshot": env_snapshot,
+        "env_diff": env_diff,
     }

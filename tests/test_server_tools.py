@@ -314,6 +314,8 @@ def test_server_delegate_task_accepts_structured_fields(tmp_path: Path) -> None:
             acceptance_criteria=["Tool returns structured status"],
             verification_commands=["pytest -q"],
             commit_mode="allowed",
+            model="gpt-5.4-mini",
+            reasoning_effort="medium",
             output_schema={"type": "object"},
         )
 
@@ -322,6 +324,8 @@ def test_server_delegate_task_accepts_structured_fields(tmp_path: Path) -> None:
         assert result["serial"] is True
         assert result["structured_output"] == {"ok": True}
         assert result["output_schema"] == {"type": "object"}
+        assert result["model"] == "gpt-5.4-mini"
+        assert result["reasoning_effort"] == "medium"
         assert "task_id" not in result
     finally:
         server.registry = old_registry
@@ -391,6 +395,57 @@ def test_server_apply_patch_tool_description_uses_generic_patch_language() -> No
     assert "*** Begin Patch" in description
 
 
+def test_delegate_task_describes_common_model_reasoning_combinations() -> None:
+    from chatgpt_web_oauth_mcp import server
+
+    async def scenario() -> tuple[str, dict[str, object]]:
+        list_tools = getattr(server.mcp, "_list_tools")
+        try:
+            tools = await list_tools()
+        except TypeError:
+            tools = await list_tools(None)
+        delegate_tool = next(tool for tool in tools if tool.name == "delegate_task")
+        return delegate_tool.description, delegate_tool.parameters
+
+    description, parameters = asyncio.run(scenario())
+    model_description = parameters["properties"]["model"]["description"]
+    reasoning_description = parameters["properties"]["reasoning_effort"]["description"]
+
+    assert "gpt-5.3-codex-spark" in description
+    assert "reasoning_effort unset/default" in description
+    assert "omit or pass empty/default for both model and reasoning_effort" in description
+    assert "gpt-5.3-codex-spark" in model_description
+    assert "fast context-gathering tasks" in model_description
+    assert "model=gpt-5.3-codex-spark" in reasoning_description
+    assert "general delegation" in reasoning_description
+
+
+def test_code_map_descriptions_explain_development_usage() -> None:
+    from chatgpt_web_oauth_mcp import server
+
+    async def scenario() -> dict[str, str]:
+        list_tools = getattr(server.mcp, "_list_tools")
+        try:
+            tools = await list_tools()
+        except TypeError:
+            tools = await list_tools(None)
+        return {tool.name: tool.description for tool in tools}
+
+    descriptions = asyncio.run(scenario())
+    assert "code_map_symbols to find definitions" in server.MCP_INSTRUCTIONS
+    assert "code_map_references to estimate impact" in server.MCP_INSTRUCTIONS
+    assert "code_map_imports to inspect module boundaries" in server.MCP_INSTRUCTIONS
+    assert "files_in_scope" in server.MCP_INSTRUCTIONS
+    assert "precise rename, type inference, or call graph analysis" in server.MCP_INSTRUCTIONS
+
+    assert "before edits or reviews" in descriptions["code_map_symbols"]
+    assert "candidate files_in_scope" in descriptions["code_map_symbols"]
+    assert "estimate impact" in descriptions["code_map_references"]
+    assert "definition lines may also appear" in descriptions["code_map_references"]
+    assert "module boundaries" in descriptions["code_map_imports"]
+    assert "dependency direction" in descriptions["code_map_imports"]
+
+
 def test_registered_tool_input_schemas_document_parameters() -> None:
     from chatgpt_web_oauth_mcp import server
 
@@ -415,15 +470,42 @@ def test_registered_tool_input_schemas_document_parameters() -> None:
         "required",
         "forbidden",
     ]
+    assert schemas["delegate_task"]["properties"]["reasoning_effort"]["enum"] == [
+        "default",
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    ]
     for name in ["command", "commands", "mode", "max_concurrency", "force"]:
         assert name in schemas["run_command"]["properties"]
     for name in ["queries", "mode", "max_concurrency"]:
         assert name in schemas["search"]["properties"]
+    for name in ["cwd", "include_packages"]:
+        assert name in schemas["env_snapshot"]["properties"]
+    for name in ["left", "right"]:
+        assert name in schemas["env_diff"]["properties"]
+    for name in ["path", "language", "limit"]:
+        assert name in schemas["code_map_symbols"]["properties"]
+        assert name in schemas["code_map_imports"]["properties"]
+    for name in ["path", "symbol", "glob", "limit"]:
+        assert name in schemas["code_map_references"]["properties"]
+    for name in ["path", "base_ref", "mode", "branch"]:
+        assert name in schemas["git_worktree_create"]["properties"]
+    for name in ["path", "force"]:
+        assert name in schemas["git_worktree_remove"]["properties"]
     assert schemas["run_command"]["properties"]["mode"]["enum"] == [
         "sequential",
         "parallel",
     ]
-    for name in ["task_id", "files_in_scope", "out_of_scope", "done_means"]:
+    assert schemas["git_worktree_create"]["properties"]["mode"]["enum"] == [
+        "clean",
+        "detached",
+    ]
+    for name in ["task_id", "files_in_scope", "out_of_scope", "done_means", "model", "reasoning_effort"]:
         assert name in schemas["delegate_task"]["properties"]
     for name in ["delegate_id", "limit", "watch_seconds", "poll_seconds"]:
         assert name in schemas["delegate_status"]["properties"]
@@ -453,9 +535,18 @@ def test_server_tools_expose_chatgpt_compatible_annotations() -> None:
     assert all(value["title"] for value in descriptors.values())
     assert all(value for value in annotations.values())
     assert annotations["server_info"]["readOnlyHint"] is True
+    assert annotations["env_snapshot"]["readOnlyHint"] is True
+    assert annotations["env_diff"]["readOnlyHint"] is True
     assert annotations["search"]["readOnlyHint"] is True
+    assert annotations["code_map_symbols"]["readOnlyHint"] is True
+    assert annotations["code_map_references"]["readOnlyHint"] is True
+    assert annotations["code_map_imports"]["readOnlyHint"] is True
     assert annotations["write_file"]["readOnlyHint"] is False
     assert annotations["write_file"]["destructiveHint"] is True
+    assert annotations["git_worktree_create"]["readOnlyHint"] is False
+    assert annotations["git_worktree_list"]["readOnlyHint"] is True
+    assert annotations["git_worktree_status"]["readOnlyHint"] is True
+    assert annotations["git_worktree_remove"]["destructiveHint"] is True
     assert annotations["run_command"]["openWorldHint"] is True
     assert annotations["delegate_task"]["openWorldHint"] is True
     assert annotations["delegate_status"]["readOnlyHint"] is True

@@ -162,6 +162,7 @@ def test_mcp_removed_task_tools_are_not_exposed(tmp_path: Path, monkeypatch) -> 
                     "list_skills",
                 }:
                     assert removed not in names
+                assert not {name for name in names if name.startswith("obsidian_")}
 
         anyio.run(scenario)
 

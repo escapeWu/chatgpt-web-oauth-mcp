@@ -38,9 +38,9 @@ ChatGPT Web is expected to act as the architect, manager, and reviewer. It shoul
 use direct MCP tools to inspect the workspace, form the plan, make small edits
 when appropriate, and verify results. `delegate_task` is reserved for one
 bounded Codex Execution Prompt at a time: a narrow task id, files in scope, out
-of scope, acceptance criteria, done-means, and verification commands. This keeps
-Codex delegation observable and avoids turning long work into one opaque
-black-box subprocess.
+of scope, acceptance criteria, done-means, verification commands, and optional
+per-call model/reasoning overrides. This keeps Codex delegation observable and
+avoids turning long work into one opaque black-box subprocess.
 
 Every delegate run writes a private audit trail under the system temporary cache
 directory, in `chatgpt-web-oauth-mcp/codex-delegates/<timestamp>-<delegate_id>/`.
@@ -177,22 +177,6 @@ Useful commands:
 ./scripts/uninstall-launchd.sh
 ```
 
-## Obsidian native MCP proxy
-
-This project can expose the Obsidian Local REST API plugin's **built-in MCP server** to ChatGPT Web through the same public OAuth MCP endpoint. ChatGPT still connects only to this project; this project connects locally to Obsidian's native MCP endpoint.
-
-Obsidian is opt-in. Enable the Obsidian Local REST API plugin, copy its API key, then add these values to `.env` and reinstall the MCP service:
-
-```bash
-CHATGPT_MCP_ENABLE_OBSIDIAN=1
-CHATGPT_MCP_OAUTH_SCOPES="local-ops obsidian"
-OBSIDIAN_API_KEY="<your-obsidian-local-rest-api-key>"
-OBSIDIAN_MCP_URL=https://127.0.0.1:27124/mcp
-OBSIDIAN_VERIFY_SSL=0
-```
-
-When enabled, the bridge exposes prefixed tools such as `obsidian_vault_list`, `obsidian_vault_read`, `obsidian_vault_patch`, `obsidian_search_simple`, `obsidian_command_execute`, and `obsidian_open_file`. Use `obsidian_mcp_list_tools` to inspect the tools currently advertised by the local Obsidian plugin. If `CHATGPT_MCP_ENABLE_OBSIDIAN=0` or is unset, no `obsidian_*` tools are registered.
-
 ## Environment variables
 
 | Variable | Required | Default |
@@ -214,10 +198,6 @@ When enabled, the bridge exposes prefixed tools such as `obsidian_vault_list`, `
 | `CHATGPT_MCP_DELEGATE_TIMEOUT` | no | `300` |
 | `CHATGPT_MCP_DEBUG_MCP_LOGGING` | no | `0` |
 | `CHATGPT_MCP_GRACEFUL_SHUTDOWN_SECONDS` | no | `30` |
-| `CHATGPT_MCP_ENABLE_OBSIDIAN` | no | `0` |
-| `OBSIDIAN_API_KEY` | required only when Obsidian proxy is enabled | empty |
-| `OBSIDIAN_MCP_URL` | no | `https://127.0.0.1:27124/mcp/` |
-| `OBSIDIAN_VERIFY_SSL` | no | `0` |
 
 ## Tools exposed to MCP clients
 
@@ -225,16 +205,19 @@ When enabled, the bridge exposes prefixed tools such as `obsidian_vault_list`, `
 | --- | --- |
 | `server_info` | Inspect runtime config and registered tools |
 | `set_default_cwd` / `get_default_cwd` | Manage session default working directory |
+| `env_snapshot` / `env_diff` | Read-only runtime diagnostics and inline environment snapshot comparison |
 | `list_files` | List files and directories |
 | `search` | Glob, regex, literal workspace search, or batch search with `mode="sequential"` / `mode="parallel"`; parallel batches cap `max_concurrency` at 3 |
 | `read_text` | Read one or more text files with pagination |
+| `code_map_symbols` / `code_map_references` / `code_map_imports` | Lightweight definitions, textual references, and import mapping |
 | `write_file` | Write full file contents, with dry-run support |
 | `apply_patch` | Apply structured patches to existing files |
 | `git_status` / `git_diff` / `git_commit` / `git_log` / `git_show` / `git_blame` | Structured git operations |
+| `git_worktree_create` / `git_worktree_list` / `git_worktree_status` / `git_worktree_remove` | Tiny generic git worktree lifecycle |
 | `run_command` | Run one shell command, or run multiple commands with `mode="sequential"` or `mode="parallel"`; timeout is capped at 300s unless `force=true` is used after explicit user approval; parallel batches cap `max_concurrency` at 3 |
-| `delegate_task` | Run one serialized, bounded Codex execution slice; wait up to 300s by default, then return status/log paths or `status=running` with readable log paths while Codex continues; raw stdout/stderr stay in log files |
+| `job_start` / `job_status` / `job_tail` / `job_kill` | Tiny in-process background job runner with stdout/stderr logs under the state directory |
+| `delegate_task` | Run one serialized, bounded Codex execution slice; optionally override `model` and `reasoning_effort` for that call; wait up to 300s by default, then return status/log paths or `status=running` with readable log paths while Codex continues; raw stdout/stderr stay in log files |
 | `delegate_status` | Read-only active/recent delegate status list with server-generated `delegate_id` values and log paths; supports `watch_seconds` long-polling up to 300s |
-| `obsidian_*` tools | Optional Obsidian native MCP proxy tools; only registered when `CHATGPT_MCP_ENABLE_OBSIDIAN=1` |
 
 ## Security notes
 

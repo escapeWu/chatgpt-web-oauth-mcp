@@ -10,8 +10,12 @@ from .gitops import git_diff as git_diff_impl
 from .gitops import git_log as git_log_impl
 from .gitops import git_show as git_show_impl
 from .gitops import git_status as git_status_impl
+from .gitops import git_worktree_create as git_worktree_create_impl
+from .gitops import git_worktree_list as git_worktree_list_impl
+from .gitops import git_worktree_remove as git_worktree_remove_impl
+from .gitops import git_worktree_status as git_worktree_status_impl
 from .pathing import resolve_cwd
-from .shell import MAX_COMMAND_BATCH_CONCURRENCY, MAX_COMMAND_TIMEOUT_SECONDS
+from .shell import MAX_COMMAND_BATCH_CONCURRENCY, MAX_COMMAND_TIMEOUT_SECONDS, MAX_JOB_TAIL_LINES
 from .shell import run_command as run_command_impl
 from .shell import run_commands as run_commands_impl
 from .tool_context import LOCAL_WRITE_TOOL, OPEN_WORLD_WRITE_TOOL, READ_ONLY_TOOL, ToolContext
@@ -178,6 +182,105 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         )
 
     @mcp.tool(
+        name="git_worktree_create",
+        title="Git Worktree Create",
+        annotations=LOCAL_WRITE_TOOL,
+        description=(
+            "Create a small generic git worktree from base_ref. mode='clean' creates a new branch "
+            "for the worktree; mode='detached' creates a detached-HEAD worktree."
+        ),
+    )
+    def git_worktree_create(
+        path: Annotated[
+            str,
+            Field(description="Path for the new worktree. Relative paths resolve from cwd."),
+        ],
+        cwd: Annotated[
+            str | None,
+            Field(description="Repository working directory. Defaults to the session cwd or workspace root."),
+        ] = None,
+        base_ref: Annotated[
+            str,
+            Field(description="Git ref, branch, tag, or commit to create the worktree from."),
+        ] = "HEAD",
+        mode: Annotated[
+            Literal["clean", "detached"],
+            Field(description="Worktree mode: clean creates a new branch; detached checks out base_ref detached."),
+        ] = "clean",
+        branch: Annotated[
+            str | None,
+            Field(description="Optional branch name for mode='clean'. Defaults to the worktree directory name."),
+        ] = None,
+    ) -> dict[str, object]:
+        resolved_cwd = resolve_cwd(cwd, ctx.workspace_root)
+        return git_worktree_create_impl(
+            cwd=resolved_cwd,
+            path=path,
+            base_ref=base_ref,
+            mode=mode,
+            branch=branch,
+        )
+
+    @mcp.tool(
+        name="git_worktree_list",
+        title="Git Worktree List",
+        annotations=READ_ONLY_TOOL,
+        description="Return registered git worktrees for the repository at cwd.",
+    )
+    def git_worktree_list(
+        cwd: Annotated[
+            str | None,
+            Field(description="Repository working directory. Defaults to the session cwd or workspace root."),
+        ] = None
+    ) -> dict[str, object]:
+        resolved_cwd = resolve_cwd(cwd, ctx.workspace_root)
+        return git_worktree_list_impl(cwd=resolved_cwd)
+
+    @mcp.tool(
+        name="git_worktree_status",
+        title="Git Worktree Status",
+        annotations=READ_ONLY_TOOL,
+        description=(
+            "Return git status for one registered worktree, or for all registered worktrees when path is omitted."
+        ),
+    )
+    def git_worktree_status(
+        cwd: Annotated[
+            str | None,
+            Field(description="Repository working directory. Defaults to the session cwd or workspace root."),
+        ] = None,
+        path: Annotated[
+            str | None,
+            Field(description="Optional worktree path to inspect. Relative paths resolve from cwd."),
+        ] = None,
+    ) -> dict[str, object]:
+        resolved_cwd = resolve_cwd(cwd, ctx.workspace_root)
+        return git_worktree_status_impl(cwd=resolved_cwd, path=path)
+
+    @mcp.tool(
+        name="git_worktree_remove",
+        title="Git Worktree Remove",
+        annotations=LOCAL_WRITE_TOOL,
+        description="Remove a registered git worktree. Dirty worktrees are refused unless force=true.",
+    )
+    def git_worktree_remove(
+        path: Annotated[
+            str,
+            Field(description="Registered worktree path to remove. Relative paths resolve from cwd."),
+        ],
+        cwd: Annotated[
+            str | None,
+            Field(description="Repository working directory. Defaults to the session cwd or workspace root."),
+        ] = None,
+        force: Annotated[
+            bool,
+            Field(description="Remove even when the worktree has uncommitted changes."),
+        ] = False,
+    ) -> dict[str, object]:
+        resolved_cwd = resolve_cwd(cwd, ctx.workspace_root)
+        return git_worktree_remove_impl(cwd=resolved_cwd, path=path, force=force)
+
+    @mcp.tool(
         name="run_command",
         title="Run Command",
         annotations=OPEN_WORLD_WRITE_TOOL,
@@ -267,6 +370,96 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         )
 
     @mcp.tool(
+        name="job_start",
+        title="Job Start",
+        annotations=OPEN_WORLD_WRITE_TOOL,
+        description=(
+            "Start one generic local subprocess in the background. stdout and stderr are "
+            "captured to per-job log files under the server state directory. This is only "
+            "an in-process runtime registry: no scheduling, restart, resume, dependencies, "
+            "or artifact tracking."
+        ),
+    )
+    def job_start(
+        command: Annotated[str, Field(description="Shell command to start in the background.")],
+        cwd: Annotated[
+            str | None,
+            Field(description="Working directory for the job. Defaults to the session cwd or workspace root."),
+        ] = None,
+        env: Annotated[
+            dict[str, str] | None,
+            Field(description="Optional environment variable overrides for the job process."),
+        ] = None,
+        name: Annotated[
+            str | None,
+            Field(description="Optional human-readable job name returned by status calls."),
+        ] = None,
+    ) -> dict[str, object]:
+        resolved_cwd = resolve_cwd(cwd, ctx.workspace_root)
+        return ctx.job_registry.start_job(
+            command=command,
+            cwd=resolved_cwd,
+            state_dir=ctx.state_dir,
+            env=env,
+            name=name,
+        )
+
+    @mcp.tool(
+        name="job_status",
+        title="Job Status",
+        annotations=READ_ONLY_TOOL,
+        description=(
+            "Return status for a background job started by this server process, including "
+            "pid, elapsed time, exit code, resource usage when available, and stdout/stderr log paths."
+        ),
+    )
+    def job_status(
+        job_id: Annotated[str, Field(description="Server-generated job_id returned by job_start.")]
+    ) -> dict[str, object]:
+        return ctx.job_registry.job_status(job_id=job_id)
+
+    @mcp.tool(
+        name="job_tail",
+        title="Job Tail",
+        annotations=READ_ONLY_TOOL,
+        description=(
+            "Return the last N lines from a background job's stdout or stderr log. "
+            f"Line count is bounded to {MAX_JOB_TAIL_LINES}."
+        ),
+    )
+    def job_tail(
+        job_id: Annotated[str, Field(description="Server-generated job_id returned by job_start.")],
+        stream: Annotated[
+            Literal["stdout", "stderr"],
+            Field(description="Which job log stream to tail."),
+        ] = "stdout",
+        lines: Annotated[
+            int,
+            Field(description=f"Number of log lines to return, capped at {MAX_JOB_TAIL_LINES}.", ge=1),
+        ] = 50,
+    ) -> dict[str, object]:
+        return ctx.job_registry.tail_job(job_id=job_id, stream=stream, lines=lines)
+
+    @mcp.tool(
+        name="job_kill",
+        title="Job Kill",
+        annotations=OPEN_WORLD_WRITE_TOOL,
+        description=(
+            "Signal a background job that was started by job_start. Uses TERM by default, "
+            "or KILL when explicitly requested. It only signals the registered subprocess "
+            "for the supplied job_id, never an arbitrary caller-provided pid."
+        ),
+    )
+    def job_kill(
+        job_id: Annotated[str, Field(description="Server-generated job_id returned by job_start.")],
+        signal: Annotated[
+            Literal["TERM", "KILL"],
+            Field(description="Signal to send to the registered job process group."),
+        ] = "TERM",
+    ) -> dict[str, object]:
+        return ctx.job_registry.kill_job(job_id=job_id, signal_name=signal)
+
+    @mcp.tool(
         name="delegate_task",
         title="Delegate Task",
         annotations=OPEN_WORLD_WRITE_TOOL,
@@ -282,7 +475,10 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             "to inspect live progress. Completed responses do not inline stdout/stderr; use logs "
             "for raw output. If another non-matching delegate is active, the requested new task is "
             "not started and the response includes request_conflict/new_task_started=false. "
-            "Optionally provide output_schema and parse_structured_output=true to capture JSON output."
+            "Optionally provide output_schema and parse_structured_output=true to capture JSON output. "
+            "Common model/reasoning combinations: for fast context-gathering tasks, use "
+            "model=gpt-5.3-codex-spark and leave reasoning_effort unset/default; for general "
+            "delegation, omit or pass empty/default for both model and reasoning_effort."
         ),
     )
     def delegate_task(
@@ -375,6 +571,30 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
                 )
             ),
         ] = "allowed",
+        model: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Optional Codex model override for this delegate call, for example gpt-5.5. "
+                    "Omit or pass default to inherit the Codex CLI/user config; otherwise the "
+                    "server passes --model <value> to codex exec. Common combinations: use "
+                    "gpt-5.3-codex-spark for fast context-gathering tasks with reasoning_effort "
+                    "unset/default; omit or pass empty/default for general delegation."
+                )
+            ),
+        ] = None,
+        reasoning_effort: Annotated[
+            Literal["default", "none", "minimal", "low", "medium", "high", "xhigh", "max"],
+            Field(
+                description=(
+                    "Optional Codex reasoning effort override for this delegate call. Use default "
+                    "to inherit the Codex CLI/user config; otherwise the server passes "
+                    "-c model_reasoning_effort=<value> to codex exec. Common combinations: leave "
+                    "unset/default with model=gpt-5.3-codex-spark for fast context-gathering tasks; "
+                    "omit or pass empty/default for general delegation."
+                )
+            ),
+        ] = "default",
         timeout: Annotated[
             int | None,
             Field(
@@ -431,6 +651,8 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             done_means=done_means,
             verification_commands=verification_commands,
             commit_mode=commit_mode,
+            model=model,
+            reasoning_effort=reasoning_effort,
             output_schema=output_schema,
             parse_structured_output=parse_structured_output,
         )
@@ -499,7 +721,15 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         "git_log": git_log,
         "git_show": git_show,
         "git_blame": git_blame,
+        "git_worktree_create": git_worktree_create,
+        "git_worktree_list": git_worktree_list,
+        "git_worktree_status": git_worktree_status,
+        "git_worktree_remove": git_worktree_remove,
         "run_command": run_command,
+        "job_start": job_start,
+        "job_status": job_status,
+        "job_tail": job_tail,
+        "job_kill": job_kill,
         "delegate_task": delegate_task,
         "delegate_status": delegate_status,
     }
