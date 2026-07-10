@@ -21,6 +21,21 @@ from .shell import run_commands as run_commands_impl
 from .tool_context import LOCAL_WRITE_TOOL, OPEN_WORLD_WRITE_TOOL, READ_ONLY_TOOL, ToolContext
 
 
+DelegateModel = (
+    Literal[
+        "default",
+        "gpt-5.3-codex-spark",
+        "gpt-5.4-mini",
+        "gpt-5.5",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+    ]
+    | str
+    | None
+)
+
+
 def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
     """Register git, synchronous shell, and serial Codex delegate tools."""
 
@@ -476,9 +491,13 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             "for raw output. If another non-matching delegate is active, the requested new task is "
             "not started and the response includes request_conflict/new_task_started=false. "
             "Optionally provide output_schema and parse_structured_output=true to capture JSON output. "
-            "Common model/reasoning combinations: for fast context-gathering tasks, use "
-            "model=gpt-5.3-codex-spark and leave reasoning_effort unset/default; for general "
-            "delegation, omit or pass empty/default for both model and reasoning_effort."
+            "Model routing: use gpt-5.6-sol for the hardest architecture, quantitative-model "
+            "RCA, trading-training design, research, and complex code review; gpt-5.6-terra "
+            "for regular feature development, single-module implementation, test repair, and "
+            "data analysis; gpt-5.6-luna for code search, format conversion, simple scripts, "
+            "and batch mechanical work. For fast context-gathering tasks, "
+            "gpt-5.3-codex-spark remains available with reasoning_effort unset/default. For "
+            "general delegation, omit or pass empty/default for both model and reasoning_effort."
         ),
     )
     def delegate_task(
@@ -572,14 +591,20 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             ),
         ] = "allowed",
         model: Annotated[
-            str | None,
+            DelegateModel,
             Field(
                 description=(
-                    "Optional Codex model override for this delegate call, for example gpt-5.5. "
-                    "Omit or pass default to inherit the Codex CLI/user config; otherwise the "
-                    "server passes --model <value> to codex exec. Common combinations: use "
-                    "gpt-5.3-codex-spark for fast context-gathering tasks with reasoning_effort "
-                    "unset/default; omit or pass empty/default for general delegation."
+                    "Optional Codex model override. Recommended choices: gpt-5.6-sol is the "
+                    "flagship for complex reasoning, long tasks, coding, research, and strong "
+                    "tool collaboration (system architecture, quantitative-model RCA, "
+                    "trading-training design, complex code review); gpt-5.6-terra is the "
+                    "cost-effective default for regular development, single-module work, test "
+                    "repair, and data analysis; gpt-5.6-luna is the fastest, lowest-cost option "
+                    "for code search, format conversion, simple scripts, and batch mechanical "
+                    "tasks. gpt-5.3-codex-spark remains suitable for fast context-gathering tasks with "
+                    "reasoning_effort unset/default. Omit or pass default to inherit the Codex "
+                    "CLI/user config. Other model names remain accepted for forward compatibility; "
+                    "non-default values are passed as --model <value> to codex exec."
                 )
             ),
         ] = None,

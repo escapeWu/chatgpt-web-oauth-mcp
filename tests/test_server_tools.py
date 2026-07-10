@@ -411,6 +411,12 @@ def test_delegate_task_describes_common_model_reasoning_combinations() -> None:
     model_description = parameters["properties"]["model"]["description"]
     reasoning_description = parameters["properties"]["reasoning_effort"]["description"]
 
+    for model in ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]:
+        assert model in description
+        assert model in model_description
+    assert "architecture" in model_description
+    assert "single-module work" in model_description
+    assert "code search" in model_description
     assert "gpt-5.3-codex-spark" in description
     assert "reasoning_effort unset/default" in description
     assert "omit or pass empty/default for both model and reasoning_effort" in description
@@ -480,6 +486,20 @@ def test_registered_tool_input_schemas_document_parameters() -> None:
         "xhigh",
         "max",
     ]
+    model_schema = schemas["delegate_task"]["properties"]["model"]
+    recommended_models = next(
+        choice["enum"] for choice in model_schema["anyOf"] if "enum" in choice
+    )
+    assert recommended_models == [
+        "default",
+        "gpt-5.3-codex-spark",
+        "gpt-5.4-mini",
+        "gpt-5.5",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+    ]
+    assert any(choice.get("type") == "string" for choice in model_schema["anyOf"])
     for name in ["command", "commands", "mode", "max_concurrency", "force"]:
         assert name in schemas["run_command"]["properties"]
     for name in ["queries", "mode", "max_concurrency"]:
