@@ -2,7 +2,7 @@
 
 > [感谢 LINIXDO 社区](https://linux.do/)
 
-一个给 **ChatGPT Web** 使用的本地 FastMCP 服务器：通过公网 HTTPS + OAuth 暴露 `/mcp`，让 ChatGPT Web 可以调用你本机的文件、搜索、补丁编辑、单条或批量 Shell、Git，以及单任务串行、每次默认最多阻塞 300 秒的 Codex 执行委托能力。
+一个给 **ChatGPT Web** 使用的本地 FastMCP 服务器：通过公网 HTTPS + OAuth 暴露 `/mcp`，让 ChatGPT Web 可以调用你本机的文件、搜索、补丁编辑、单条或批量 Shell、后台任务、持久 tmux 交互会话、Git，以及单任务串行、每次默认最多阻塞 300 秒的 Codex 执行委托能力。
 
 这个版本已经剥离原项目中的 Notion 专用工作流、说明文档、截图资源和提示词，只保留 ChatGPT Web OAuth MCP 适配与本地操作工具。
 
@@ -28,6 +28,15 @@
 - Protected resource metadata
 - `WWW-Authenticate` 中返回 `resource_metadata`
 - Bearer access token 校验
+- `tmux_list` / `tmux_start` / `tmux_status` / `tmux_capture` / `tmux_send` / `tmux_kill` 持久交互终端工具
+
+## tmux 使用边界
+
+- 短命令使用 `run_command`。
+- 非交互后台任务和独立 stdout/stderr 日志使用 `job_*`。
+- 需要持久伪终端、交互输入或人工 attach 的程序使用 `tmux_*`。
+- 默认连接普通 `default` socket，因此可以直接执行 `tmux attach -t <session>`；设置 `CHATGPT_MCP_TMUX_SOCKET_NAME` 后，人工连接需使用 `tmux -L <socket> attach -t <session>`。
+- `tmux_capture` 返回的是有界终端画面与 history 快照，并不是完整日志。Codex CLI 等程序建议配合 `--no-alt-screen` 使用。
 
 ## 运行模型
 

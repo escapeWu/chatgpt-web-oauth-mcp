@@ -86,6 +86,18 @@ class ToolContext:
         return self._get("CODEX_COMMAND")
 
     @property
+    def tmux_binary(self) -> str:
+        return str(self._get("TMUX_BINARY", "tmux"))
+
+    @property
+    def tmux_socket_name(self) -> str:
+        return str(self._get("TMUX_SOCKET_NAME", "default"))
+
+    @property
+    def tmux_control_timeout(self) -> int:
+        return int(self._get("TMUX_CONTROL_TIMEOUT", 10))
+
+    @property
     def registry(self) -> Any:
         return self._get("registry")
 

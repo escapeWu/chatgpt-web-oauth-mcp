@@ -2,7 +2,7 @@
 
 ## What is this?
 
-A local MCP (Model Context Protocol) server that lets ChatGPT Web call local filesystem, shell, git, and delegated coding tools through an HTTPS MCP endpoint with OAuth. Built with Python 3.11+ and FastMCP. Local endpoint: `http://127.0.0.1:8766/mcp`.
+A local MCP (Model Context Protocol) server that lets ChatGPT Web call local filesystem, shell, persistent tmux, git, and delegated coding tools through an HTTPS MCP endpoint with OAuth. Built with Python 3.11+ and FastMCP. Local endpoint: `http://127.0.0.1:8766/mcp`.
 
 ## Architecture
 
@@ -29,6 +29,7 @@ src/chatgpt_web_oauth_mcp/
 ├── tools_core.py  # server_info, cwd, and env_snapshot/env_diff tools
 ├── tools_files.py # list_files, search, read_text, code_map_*, write_file, apply_patch registration
 ├── tools_git_shell.py # git_*, synchronous shell, serial Codex delegate registration
+├── tools_tmux.py # tmux list/start/status/capture/send/kill MCP registration
 ├── config.py      # Env-var driven settings
 ├── oauth.py       # OAuth dynamic registration, PKCE, token store, metadata
 ├── http_compat.py # ChatGPT-compatible HTTP/OAuth/MCP compatibility layer
@@ -38,6 +39,7 @@ src/chatgpt_web_oauth_mcp/
 ├── files.py       # list_files, read_text, write_file
 ├── search.py      # glob/regex/text search implementations
 ├── shell.py       # run_command subprocess helper
+├── tmux_ops.py    # bounded persistent tmux session wrapper
 ├── executors.py   # synchronous serialized delegate_task via Codex
 └── supervisor.py  # rolling-reload supervisor for tunnels / launchd
 ```
@@ -59,6 +61,7 @@ src/chatgpt_web_oauth_mcp/
 | `git_worktree_create` / `git_worktree_list` / `git_worktree_status` / `git_worktree_remove` | Tiny generic git worktree lifecycle |
 | `run_command` | Execute one shell command, or multiple commands with `mode="sequential"` or `mode="parallel"`; timeout is capped at 300s unless `force=true` is used after explicit user approval; parallel batches cap `max_concurrency` at 3 |
 | `job_start` / `job_status` / `job_tail` / `job_kill` | Tiny generic in-process background job runner with stdout/stderr logs under the state directory; no scheduler, resume, dependencies, or artifact tracking |
+| `tmux_list` / `tmux_start` / `tmux_status` / `tmux_capture` / `tmux_send` / `tmux_kill` | Tiny persistent interactive TTY lifecycle; one primary-pane workflow, bounded capture, stdin-buffer text paste, and no attach or server-wide kill tool |
 | `delegate_task` | Run one serialized, bounded Codex execution slice; wait up to 300s by default, then return either the result or `status=running` with readable log paths while Codex continues |
 | `delegate_status` | Read-only active/recent delegate status list with server-generated `delegate_id` values and log paths; supports `watch_seconds` long-polling up to 300s |
 
@@ -68,6 +71,7 @@ src/chatgpt_web_oauth_mcp/
 - OAuth mode is enabled with `CHATGPT_MCP_AUTH_MODE=oauth`.
 - `CHATGPT_MCP_PUBLIC_BASE_URL` must be set in OAuth mode so issuer and resource URLs are stable and not Host-header-derived.
 - Prefer separate `CHATGPT_MCP_AUTH_TOKEN` and `CHATGPT_MCP_OAUTH_LOGIN_TOKEN` values.
+- `tmux_*` defaults to the normal `default` tmux socket so sessions remain manually attachable. Use a separate `CHATGPT_MCP_TMUX_SOCKET_NAME` when isolation is preferred. `tmux_capture` is a terminal snapshot, not a lossless stdout/stderr log.
 - `delegate_task` is intentionally Codex-only and single-flight. It should receive one small execution prompt with `files_in_scope`, `out_of_scope`, `acceptance_criteria`, `done_means`, and verification commands when possible. A caller-provided `task_id` is optional; the server always returns a generated `delegate_id`, and stateless clients can call `delegate_status` to recover active/recent delegate ids. It long-polls the active delegate for up to 300 seconds by default; if Codex is still running, it returns `status=running` and the client should call `delegate_task` again to continue waiting. `delegate_status` can also long-poll with `watch_seconds=300` and returns early only when task status changes. Each delegate writes private audit logs under the system temporary cache directory (`prompt.txt`, `stdout.log`, `stderr.log`, `metadata.json`) and returns their paths in `logs`; callers can use `read_text` on those paths to inspect live progress. Completed delegate responses do not inline raw stdout/stderr; read the returned logs for raw output. No TaskBoard, Claude delegate, or skill-discovery tools are exposed.
 
 ## Development rules

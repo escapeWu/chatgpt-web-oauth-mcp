@@ -8,6 +8,7 @@ from . import session
 from .envtools import env_diff as env_diff_impl
 from .envtools import env_snapshot as env_snapshot_impl
 from .pathing import resolve_cwd, resolve_path
+from .tmux_ops import tmux_runtime_info
 from .tool_context import LOCAL_STATE_TOOL, READ_ONLY_TOOL, ToolContext
 
 
@@ -46,6 +47,10 @@ def register_core_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             "auth": ctx.current_oauth_config().normalized_auth_mode,
             "debug_mcp_logging": ctx.debug_mcp_logging,
             "codex_command": ctx.codex_command,
+            "tmux": tmux_runtime_info(
+                binary=ctx.tmux_binary,
+                socket_name=ctx.tmux_socket_name,
+            ),
             "routing_contract": {
                 "chatgpt_web_role": "architect_manager_reviewer",
                 "codex_delegate_role": "single_bounded_execution_slice",

@@ -61,6 +61,9 @@ OAUTH_TOKEN_TTL_SECONDS = int(os.environ.get("CHATGPT_MCP_OAUTH_TOKEN_TTL_SECOND
 CODEX_COMMAND = os.environ.get("CHATGPT_MCP_CODEX_COMMAND", "codex").strip()
 COMMAND_TIMEOUT = int(os.environ.get("CHATGPT_MCP_COMMAND_TIMEOUT", "120"))
 DELEGATE_TIMEOUT = int(os.environ.get("CHATGPT_MCP_DELEGATE_TIMEOUT", "300"))
+TMUX_BINARY = os.environ.get("CHATGPT_MCP_TMUX_BINARY", "tmux").strip() or "tmux"
+TMUX_SOCKET_NAME = os.environ.get("CHATGPT_MCP_TMUX_SOCKET_NAME", "default").strip() or "default"
+TMUX_CONTROL_TIMEOUT = int(os.environ.get("CHATGPT_MCP_TMUX_CONTROL_TIMEOUT", "10"))
 DEBUG_MCP_LOGGING = _env_flag("CHATGPT_MCP_DEBUG_MCP_LOGGING", default=False)
 GRACEFUL_SHUTDOWN_SECONDS = int(
     os.environ.get("CHATGPT_MCP_GRACEFUL_SHUTDOWN_SECONDS", "30")

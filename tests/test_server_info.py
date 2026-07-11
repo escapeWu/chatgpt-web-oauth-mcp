@@ -55,6 +55,12 @@ def test_server_info_reports_metadata_and_tools() -> None:
         "git_worktree_list",
         "git_worktree_status",
         "git_worktree_remove",
+        "tmux_list",
+        "tmux_start",
+        "tmux_status",
+        "tmux_capture",
+        "tmux_send",
+        "tmux_kill",
         "delegate_task",
         "delegate_status",
     ]:

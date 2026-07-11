@@ -23,6 +23,9 @@ from .config import (
     PORT,
     PUBLIC_BASE_URL,
     STATE_DIR,
+    TMUX_BINARY,
+    TMUX_CONTROL_TIMEOUT,
+    TMUX_SOCKET_NAME,
     WORKSPACE_ROOT,
     ensure_runtime_directories,
 )
@@ -34,6 +37,7 @@ from .tool_context import ToolContext
 from .tools_core import register_core_tools
 from .tools_files import register_file_tools
 from .tools_git_shell import register_git_shell_tools
+from .tools_tmux import register_tmux_tools
 
 
 # Bearer auth lives exclusively in the HTTP layer (http_compat.HTTPBearerAuthMiddleware)
@@ -54,7 +58,9 @@ MCP_INSTRUCTIONS = (
     "delegate_task files_in_scope when delegating. code_map_* is lightweight and not for "
     "precise rename, type inference, or call graph analysis. "
     "run_command for short single or batched shell work, job_start/job_status/job_tail/job_kill for "
-    "generic background local jobs, and git_* only inside a git repository. "
+    "generic non-interactive background local jobs, tmux_* for persistent interactive TTY sessions, "
+    "and git_* only inside a git repository. Use tmux_list/status/capture to observe a session and "
+    "tmux_send for bounded text or key input; tmux capture output is a terminal snapshot, not a lossless log. "
     "Use delegate_task only for one bounded Codex Execution Prompt when direct tools are insufficient; "
     "it runs one serialized Codex delegate and blocks up to 300 seconds by default. If it returns "
     "status=running, call delegate_task again to continue waiting and use read_text on returned "
@@ -109,6 +115,7 @@ _tool_exports: dict[str, object] = {}
 _tool_exports.update(register_core_tools(mcp, _tool_context))
 _tool_exports.update(register_file_tools(mcp, _tool_context))
 _tool_exports.update(register_git_shell_tools(mcp, _tool_context))
+_tool_exports.update(register_tmux_tools(mcp, _tool_context))
 globals().update(_tool_exports)
 
 

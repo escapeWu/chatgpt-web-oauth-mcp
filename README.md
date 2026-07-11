@@ -4,7 +4,7 @@
 
 [![中文文档](https://img.shields.io/badge/docs-中文-blue.svg)](README-zh.md)
 
-A local FastMCP server that exposes filesystem, shell, git, and delegated coding tools to **ChatGPT Web** through an HTTPS MCP endpoint with OAuth.
+A local FastMCP server that exposes filesystem, shell, git, persistent tmux sessions, and delegated coding tools to **ChatGPT Web** through an HTTPS MCP endpoint with OAuth.
 
 This project is a stripped-down ChatGPT Web OAuth MCP server. It keeps the useful local-ops MCP tools and the OAuth compatibility layer, while removing the original Notion-specific workflow, docs, assets, and prompts.
 
@@ -29,7 +29,7 @@ Major changes from upstream:
 - PKCE authorization-code flow
 - Protected-resource metadata and `WWW-Authenticate` challenges
 - Bearer access-token validation
-- Local tools for files, search, patching, synchronous shell commands, git, and one serialized long-polling Codex execution delegate
+- Local tools for files, search, patching, synchronous shell commands, background jobs, persistent interactive tmux sessions, git, and one serialized long-polling Codex execution delegate
 - Optional `cloudflared` tunnel and macOS `launchd` helpers
 
 ## Operating model
@@ -196,6 +196,9 @@ Useful commands:
 | `CHATGPT_MCP_CODEX_COMMAND` | no | `codex` |
 | `CHATGPT_MCP_COMMAND_TIMEOUT` | no | `120` |
 | `CHATGPT_MCP_DELEGATE_TIMEOUT` | no | `300` |
+| `CHATGPT_MCP_TMUX_BINARY` | no | `tmux` |
+| `CHATGPT_MCP_TMUX_SOCKET_NAME` | no | `default` |
+| `CHATGPT_MCP_TMUX_CONTROL_TIMEOUT` | no | `10` |
 | `CHATGPT_MCP_DEBUG_MCP_LOGGING` | no | `0` |
 | `CHATGPT_MCP_GRACEFUL_SHUTDOWN_SECONDS` | no | `30` |
 
@@ -216,6 +219,7 @@ Useful commands:
 | `git_worktree_create` / `git_worktree_list` / `git_worktree_status` / `git_worktree_remove` | Tiny generic git worktree lifecycle |
 | `run_command` | Run one shell command, or run multiple commands with `mode="sequential"` or `mode="parallel"`; timeout is capped at 300s unless `force=true` is used after explicit user approval; parallel batches cap `max_concurrency` at 3 |
 | `job_start` / `job_status` / `job_tail` / `job_kill` | Tiny in-process background job runner with stdout/stderr logs under the state directory |
+| `tmux_list` / `tmux_start` / `tmux_status` / `tmux_capture` / `tmux_send` / `tmux_kill` | Persistent interactive TTY sessions using the configured tmux socket; text input uses stdin-backed tmux buffers and capture output is a bounded terminal snapshot |
 | `delegate_task` | Run one serialized, bounded Codex execution slice; optionally override `model` and `reasoning_effort` for that call; wait up to 300s by default, then return status/log paths or `status=running` with readable log paths while Codex continues; raw stdout/stderr stay in log files |
 | `delegate_status` | Read-only active/recent delegate status list with server-generated `delegate_id` values and log paths; supports `watch_seconds` long-polling up to 300s |
 
@@ -231,6 +235,13 @@ Recommended defaults:
 - Prefer a named Cloudflare tunnel for stable URLs.
 - Rotate tokens and clear `~/.chatgpt-web-oauth-mcp/oauth.json` if credentials leak.
 - Remove or disable high-risk tools before exposing this to untrusted clients.
+- The default tmux socket name is `default`, so MCP-created sessions can be attached manually with `tmux attach -t <session>`. Set `CHATGPT_MCP_TMUX_SOCKET_NAME` to isolate them when needed, then attach with `tmux -L <socket> attach -t <session>`.
+
+## Tmux usage model
+
+Use `run_command` for short commands, `job_*` for non-interactive background processes with separate stdout/stderr logs, and `tmux_*` for interactive programs that need a persistent pseudo-terminal. The tmux tools deliberately expose one primary-pane workflow: create a detached session, list or inspect it, capture recent terminal history, paste text or send allowlisted keys, and remove the session.
+
+`tmux_capture` is not a complete application log. It returns the current pane screen and retained tmux history, so full-screen TUIs, progress bars, carriage-return updates, and history limits affect the result. For tools such as Codex CLI, prefer modes such as `--no-alt-screen` when the terminal history must remain observable.
 
 ## Development
 
