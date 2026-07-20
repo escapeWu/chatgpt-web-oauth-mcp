@@ -17,15 +17,21 @@ from .config import (
     DELEGATE_TIMEOUT,
     GRACEFUL_SHUTDOWN_SECONDS,
     HOST,
+    JOB_OUTPUT_TOKEN_BUDGET,
     OAUTH_LOGIN_TOKEN,
     OAUTH_SCOPES,
     OAUTH_TOKEN_TTL_SECONDS,
     PORT,
     PUBLIC_BASE_URL,
+    READ_TOKEN_BUDGET,
+    RIPGREP_BINARY,
+    RUN_CAPTURE_MAX_BYTES,
+    RUN_TOKEN_BUDGET,
     STATE_DIR,
     TMUX_BINARY,
     TMUX_CONTROL_TIMEOUT,
     TMUX_SOCKET_NAME,
+    TOOL_OUTPUT_TOKEN_BUDGET,
     WORKSPACE_ROOT,
     ensure_runtime_directories,
 )
@@ -57,8 +63,11 @@ MCP_INSTRUCTIONS = (
     "code_map_imports to inspect module boundaries; use those results to narrow "
     "delegate_task files_in_scope when delegating. code_map_* is lightweight and not for "
     "precise rename, type inference, or call graph analysis. "
-    "run_command for short single or batched shell work, job_start/job_status/job_tail/job_kill for "
-    "generic non-interactive background local jobs, tmux_* for persistent interactive TTY sessions, "
+    "run_command for short single or batched shell work; use job_start/job_list/job_status/job_output/"
+    "job_tail/job_kill for durable non-interactive background local jobs. job_list discovers records "
+    "from the current state directory, job_output incrementally reads one stdout or stderr stream with "
+    "a raw-byte cursor, and job_tail remains the backward-compatible last-N-lines API. Use tmux_* for "
+    "persistent interactive TTY sessions, "
     "and git_* only inside a git repository. Use tmux_list/status/capture to observe a session and "
     "tmux_send for bounded text or key input; tmux capture output is a terminal snapshot, not a lossless log. "
     "Use delegate_task only for one bounded Codex Execution Prompt when direct tools are insufficient; "

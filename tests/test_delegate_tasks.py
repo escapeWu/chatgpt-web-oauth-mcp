@@ -7,6 +7,7 @@ from pathlib import Path
 
 import chatgpt_web_oauth_mcp.executors as executors
 from chatgpt_web_oauth_mcp.executors import ExecutorRegistry, Invocation
+from chatgpt_web_oauth_mcp.response_budget import ResponseBudget, render_json_payload
 
 
 def test_run_codex_returns_synchronous_result(tmp_path: Path) -> None:
@@ -45,29 +46,62 @@ def test_run_codex_returns_synchronous_result(tmp_path: Path) -> None:
     assert metadata["stdout_bytes"] >= 4
 
 
-def test_run_codex_attaches_concurrent_calls_to_one_active_delegate(tmp_path: Path) -> None:
+def test_delegate_status_applies_shared_response_budget() -> None:
+    registry = ExecutorRegistry(codex_command="python3 -c \"print('done')\"")
+    with registry._lock:
+        for index in range(20):
+            registry._history.append(
+                {
+                    "delegate_id": f"delegate-{index}",
+                    "status": "succeeded",
+                    "completed": True,
+                    "in_progress": False,
+                    "logs": {"stdout": "/tmp/" + "x" * 100 + str(index)},
+                }
+            )
+
+    result = registry.delegate_status(limit=20, max_tokens=500)
+
+    assert result["partial"] is True
+    assert result["next_offset"] == len(result["recent"])
+    assert ResponseBudget(max_tokens=500).count_tokens(render_json_payload(result)) <= 500
+
+
+def test_run_codex_attaches_concurrent_calls_to_one_active_delegate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     registry = ExecutorRegistry(
         codex_command="python3 -c \"import time; time.sleep(0.2); print('done')\""
     )
     results: list[dict[str, object]] = []
+    starts = 0
+    starts_lock = threading.Lock()
+    original_start = registry._start_codex_delegate_impl
+
+    def counted_start(*args, **kwargs):
+        nonlocal starts
+        with starts_lock:
+            starts += 1
+        return original_start(*args, **kwargs)
+
+    monkeypatch.setattr(registry, "_start_codex_delegate_impl", counted_start)
 
     def run_delegate() -> None:
         results.append(registry.run_codex(task="finish", cwd=tmp_path, timeout=5))
 
     first = threading.Thread(target=run_delegate)
     second = threading.Thread(target=run_delegate)
-    start = time.monotonic()
     first.start()
     second.start()
     first.join(timeout=5)
     second.join(timeout=5)
-    elapsed = time.monotonic() - start
 
     assert len(results) == 2
     assert all(result["status"] == "succeeded" for result in results)
     assert {result["delegate_id"] for result in results}
     assert len({result["delegate_id"] for result in results}) == 1
-    assert elapsed < 0.35
+    assert starts == 1
 
 
 def test_run_codex_long_poll_returns_running_without_killing_process(tmp_path: Path) -> None:
@@ -186,10 +220,21 @@ def test_delegate_status_lists_active_and_recent_delegates(tmp_path: Path) -> No
     assert by_id["delegate"]["status"] == "succeeded"
 
 
-def test_delegate_status_watch_returns_when_status_changes(tmp_path: Path) -> None:
-    registry = ExecutorRegistry(
-        codex_command="python3 -c \"import time; time.sleep(0.25); print('done')\""
+def test_delegate_status_watch_returns_when_status_changes(tmp_path: Path, monkeypatch) -> None:
+    process_script = tmp_path / "delegate_watch_process.py"
+    process_script.write_text(
+        "from pathlib import Path\n"
+        "import time\n"
+        "while not Path('delegate-emit').exists():\n"
+        "    time.sleep(0.01)\n"
+        "print('x' * 8192, flush=True)\n"
+        "Path('delegate-emitted').touch()\n"
+        "while not Path('delegate-finish').exists():\n"
+        "    time.sleep(0.01)\n"
+        "print('done', flush=True)\n",
+        encoding="utf-8",
     )
+    registry = ExecutorRegistry(codex_command="python3 -u delegate_watch_process.py")
 
     running = registry.run_codex(
         task="watch status task",
@@ -197,11 +242,55 @@ def test_delegate_status_watch_returns_when_status_changes(tmp_path: Path) -> No
         timeout=5,
         wait_seconds=0.01,
     )
-    watched = registry.delegate_status(
-        delegate_id=running["delegate_id"],
-        watch_seconds=1,
-        poll_seconds=0.05,
+    initial_snapshot_seen = threading.Event()
+    running_activity_seen = threading.Event()
+    observed_activity_states: list[object] = []
+    original_status_once = registry._delegate_status_once
+
+    def track_status_once(*, delegate_id: str | None, limit: int) -> dict[str, object]:
+        snapshot = original_status_once(delegate_id=delegate_id, limit=limit)
+        delegate = snapshot.get("delegate")
+        if isinstance(delegate, dict) and delegate.get("status") == "running":
+            activity_state = delegate.get("activity_state")
+            observed_activity_states.append(activity_state)
+            initial_snapshot_seen.set()
+            if activity_state == "active" and int(delegate.get("stdout_bytes", 0)) > 0:
+                running_activity_seen.set()
+        return snapshot
+
+    monkeypatch.setattr(registry, "_delegate_status_once", track_status_once)
+    watched_results: list[dict[str, object]] = []
+    watcher = threading.Thread(
+        target=lambda: watched_results.append(
+            registry.delegate_status(
+                delegate_id=running["delegate_id"],
+                watch_seconds=3,
+                poll_seconds=0.05,
+            )
+        )
     )
+    watcher.start()
+    finish_marker = tmp_path / "delegate-finish"
+    try:
+        assert initial_snapshot_seen.wait(timeout=1)
+        assert observed_activity_states == ["starting_or_quiet"]
+
+        (tmp_path / "delegate-emit").touch()
+        assert running_activity_seen.wait(timeout=1)
+        assert (tmp_path / "delegate-emitted").exists()
+        watcher.join(timeout=0.2)
+        assert watcher.is_alive()
+
+        finish_marker.touch()
+        watcher.join(timeout=2)
+        assert not watcher.is_alive()
+    finally:
+        finish_marker.touch()
+        watcher.join(timeout=2)
+        registry.run_codex(task=None, cwd=tmp_path, timeout=5, wait_seconds=1)
+
+    assert len(watched_results) == 1
+    watched = watched_results[0]
 
     assert watched["delegate"]["delegate_id"] == running["delegate_id"]
     assert watched["delegate"]["status"] == "succeeded"

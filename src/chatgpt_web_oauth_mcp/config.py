@@ -26,12 +26,25 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from .response_budget import DEFAULT_TOOL_OUTPUT_TOKEN_BUDGET, resolve_token_budget
+
 
 def _env_flag(name: str, default: bool = False) -> bool:
     value = os.environ.get(name)
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _positive_env_int(name: str, default: int) -> int:
+    value = os.environ.get(name, str(default))
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be a positive integer; got {value!r}.") from None
+    if parsed <= 0:
+        raise ValueError(f"{name} must be a positive integer; got {value!r}.")
+    return parsed
 
 
 APP_NAME = "chatgpt-web-oauth-mcp"
@@ -61,6 +74,36 @@ OAUTH_TOKEN_TTL_SECONDS = int(os.environ.get("CHATGPT_MCP_OAUTH_TOKEN_TTL_SECOND
 CODEX_COMMAND = os.environ.get("CHATGPT_MCP_CODEX_COMMAND", "codex").strip()
 COMMAND_TIMEOUT = int(os.environ.get("CHATGPT_MCP_COMMAND_TIMEOUT", "120"))
 DELEGATE_TIMEOUT = int(os.environ.get("CHATGPT_MCP_DELEGATE_TIMEOUT", "300"))
+TOOL_OUTPUT_TOKEN_BUDGET = resolve_token_budget(
+    os.environ.get(
+        "CHATGPT_MCP_TOOL_OUTPUT_TOKEN_BUDGET",
+        str(DEFAULT_TOOL_OUTPUT_TOKEN_BUDGET),
+    ),
+    global_name="CHATGPT_MCP_TOOL_OUTPUT_TOKEN_BUDGET",
+)
+READ_TOKEN_BUDGET = resolve_token_budget(
+    TOOL_OUTPUT_TOKEN_BUDGET,
+    os.environ.get("CHATGPT_MCP_READ_TOKEN_BUDGET"),
+    global_name="CHATGPT_MCP_TOOL_OUTPUT_TOKEN_BUDGET",
+    tool_name="CHATGPT_MCP_READ_TOKEN_BUDGET",
+)
+RUN_TOKEN_BUDGET = resolve_token_budget(
+    TOOL_OUTPUT_TOKEN_BUDGET,
+    os.environ.get("CHATGPT_MCP_RUN_TOKEN_BUDGET"),
+    global_name="CHATGPT_MCP_TOOL_OUTPUT_TOKEN_BUDGET",
+    tool_name="CHATGPT_MCP_RUN_TOKEN_BUDGET",
+)
+JOB_OUTPUT_TOKEN_BUDGET = resolve_token_budget(
+    TOOL_OUTPUT_TOKEN_BUDGET,
+    os.environ.get("CHATGPT_MCP_JOB_OUTPUT_TOKEN_BUDGET"),
+    global_name="CHATGPT_MCP_TOOL_OUTPUT_TOKEN_BUDGET",
+    tool_name="CHATGPT_MCP_JOB_OUTPUT_TOKEN_BUDGET",
+)
+RUN_CAPTURE_MAX_BYTES = _positive_env_int(
+    "CHATGPT_MCP_RUN_CAPTURE_MAX_BYTES",
+    1024 * 1024,
+)
+RIPGREP_BINARY = os.environ.get("CHATGPT_MCP_RIPGREP_BINARY", "rg").strip() or "rg"
 TMUX_BINARY = os.environ.get("CHATGPT_MCP_TMUX_BINARY", "tmux").strip() or "tmux"
 TMUX_SOCKET_NAME = os.environ.get("CHATGPT_MCP_TMUX_SOCKET_NAME", "default").strip() or "default"
 TMUX_CONTROL_TIMEOUT = int(os.environ.get("CHATGPT_MCP_TMUX_CONTROL_TIMEOUT", "10"))

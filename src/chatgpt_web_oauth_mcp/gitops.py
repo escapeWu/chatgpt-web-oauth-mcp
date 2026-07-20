@@ -2,6 +2,13 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from typing import Any
+
+from .response_budget import (
+    DEFAULT_TOOL_OUTPUT_TOKEN_BUDGET,
+    ResponseBudget,
+    with_budget_metadata,
+)
 
 
 def _error(code: str, message: str, **extra: object) -> dict[str, object]:
@@ -113,6 +120,152 @@ def git_status(*, cwd: Path) -> dict[str, object]:
 _DIFF_FILE_HEADER = "diff --git "
 
 
+def _utf8_byte_page(raw: bytes, *, offset: int, max_bytes: int) -> tuple[str, int, int]:
+    """Return a valid UTF-8 page plus its exact consumed byte boundaries."""
+    requested_start = min(max(offset, 0), len(raw))
+    start = requested_start
+    while start < len(raw) and raw[start] & 0b1100_0000 == 0b1000_0000:
+        start += 1
+    end = min(max(requested_start + max(max_bytes, 0), start), len(raw))
+    while end > start:
+        try:
+            return raw[start:end].decode("utf-8"), start, end
+        except UnicodeDecodeError:
+            end -= 1
+    return "", start, start
+
+
+def _truncate_to_tokens(text: str, *, budget: ResponseBudget, max_tokens: int) -> str:
+    if not text or max_tokens <= 0:
+        return ""
+    local_budget = ResponseBudget(max_tokens=max_tokens)
+    if local_budget.measure(text).fits:
+        return text
+    low, high = 0, len(text)
+    while low < high:
+        midpoint = (low + high + 1) // 2
+        if local_budget.measure(text[:midpoint]).fits:
+            low = midpoint
+        else:
+            high = midpoint - 1
+    return text[:low]
+
+
+def _fit_git_payload(
+    payload: dict[str, Any],
+    *,
+    max_tokens: int,
+    byte_offset: int,
+    total_bytes: int,
+) -> dict[str, object]:
+    budget = ResponseBudget(max_tokens=max_tokens)
+    byte_truncated = bool(payload.get("truncated"))
+    payload["next_offset"] = (
+        byte_offset + len(str(payload.get("diff", "")).encode("utf-8"))
+        if byte_truncated
+        else None
+    )
+    rendered, measurement = with_budget_metadata(
+        payload,
+        budget=budget,
+        truncated=byte_truncated,
+        stop_reason="byte_budget" if byte_truncated else "end_of_diff",
+    )
+    if measurement.fits:
+        return rendered
+
+    file_diffs = rendered.get("file_diffs", [])
+    if isinstance(file_diffs, list):
+        per_field_tokens = max(1, max_tokens // max(2 * (len(file_diffs) + 1), 1))
+        for file_diff in file_diffs:
+            if not isinstance(file_diff, dict):
+                continue
+            original = str(file_diff.get("diff", ""))
+            file_diff["diff"] = _truncate_to_tokens(
+                original,
+                budget=budget,
+                max_tokens=per_field_tokens,
+            )
+            if file_diff["diff"] != original:
+                file_diff["truncated"] = True
+                file_diff["token_truncated"] = True
+    original_diff = str(rendered.get("diff", ""))
+    rendered["diff"] = _truncate_to_tokens(
+        original_diff,
+        budget=budget,
+        max_tokens=max(1, max_tokens // 2),
+    )
+    token_truncated = rendered["diff"] != original_diff
+    rendered["next_offset"] = (
+        byte_offset + len(str(rendered["diff"]).encode("utf-8"))
+        if byte_offset + len(str(rendered["diff"]).encode("utf-8")) < total_bytes
+        else None
+    )
+    rendered, measurement = with_budget_metadata(
+        rendered,
+        budget=budget,
+        truncated=byte_truncated or token_truncated,
+        stop_reason="token_budget" if token_truncated else "byte_budget",
+    )
+    if measurement.fits:
+        return rendered
+
+    # Prefer the flat, byte-pageable diff over duplicated per-file bodies.
+    if isinstance(file_diffs, list):
+        for file_diff in file_diffs:
+            if isinstance(file_diff, dict) and file_diff.get("diff"):
+                file_diff["diff"] = ""
+                file_diff["truncated"] = True
+                file_diff["token_truncated"] = True
+    rendered, measurement = with_budget_metadata(
+        rendered,
+        budget=budget,
+        truncated=True,
+        stop_reason="token_budget",
+    )
+    while not measurement.fits and rendered.get("diff"):
+        current = str(rendered["diff"])
+        rendered["diff"] = current[: len(current) // 2]
+        rendered["next_offset"] = byte_offset + len(str(rendered["diff"]).encode("utf-8"))
+        rendered, measurement = with_budget_metadata(
+            rendered,
+            budget=budget,
+            truncated=True,
+            stop_reason="token_budget",
+        )
+    file_diffs = rendered.get("file_diffs")
+    files = rendered.get("files")
+    while not measurement.fits and isinstance(file_diffs, list) and file_diffs:
+        file_diffs.pop()
+        if isinstance(files, list) and len(files) > len(file_diffs):
+            files.pop()
+        rendered["file_diffs_truncated"] = True
+        rendered, measurement = with_budget_metadata(
+            rendered,
+            budget=budget,
+            truncated=True,
+            stop_reason="token_budget",
+        )
+    if not measurement.fits and rendered.get("body"):
+        rendered["body"] = ""
+        rendered["body_truncated"] = True
+        rendered, measurement = with_budget_metadata(
+            rendered,
+            budget=budget,
+            truncated=True,
+            stop_reason="token_budget",
+        )
+    if rendered.get("next_offset") == byte_offset and byte_offset < total_bytes:
+        rendered["continuation_blocked"] = True
+        rendered, _measurement = with_budget_metadata(
+            rendered,
+            budget=budget,
+            truncated=True,
+            stop_reason="token_budget",
+        )
+    return rendered
+
+
 def _split_diff_by_file(diff_text: str) -> list[tuple[str, str]]:
     """Split a combined unified diff into ``(path, per_file_diff)`` tuples.
 
@@ -158,7 +311,11 @@ def git_diff(
     paths: list[str] | None = None,
     max_bytes: int = 65536,
     per_file_max_bytes: int = 16384,
+    offset: int = 0,
+    max_tokens: int = DEFAULT_TOOL_OUTPUT_TOKEN_BUDGET,
 ) -> dict[str, object]:
+    if max_bytes <= 0 or per_file_max_bytes <= 0:
+        return _error("invalid_arguments", "max_bytes and per_file_max_bytes must be positive integers.")
     repo_info = _require_repo(cwd)
     if isinstance(repo_info, dict):
         return repo_info
@@ -215,10 +372,10 @@ def git_diff(
 
     # Keep the flat `diff` + `files` names for back-compat; add richer payload.
     encoded = result.stdout.encode("utf-8")
-    truncated = len(encoded) > max_bytes
-    diff_text = encoded[:max_bytes].decode("utf-8", errors="ignore") if truncated else result.stdout
+    diff_text, start, consumed_end = _utf8_byte_page(encoded, offset=offset, max_bytes=max_bytes)
+    truncated = consumed_end < len(encoded)
 
-    return {
+    payload = {
         "success": True,
         "cwd": str(cwd),
         "repo_root": str(repo_root),
@@ -229,6 +386,12 @@ def git_diff(
         "truncated": truncated,
         "total_bytes": len(encoded),
     }
+    return _fit_git_payload(
+        payload,
+        max_tokens=max_tokens,
+        byte_offset=start,
+        total_bytes=len(encoded),
+    )
 
 
 def git_commit(
@@ -375,8 +538,12 @@ def git_show(
     ref: str = "HEAD",
     max_bytes: int = 65536,
     per_file_max_bytes: int = 16384,
+    offset: int = 0,
+    max_tokens: int = DEFAULT_TOOL_OUTPUT_TOKEN_BUDGET,
 ) -> dict[str, object]:
     """Return metadata + diff for a single commit (or any git ref)."""
+    if max_bytes <= 0 or per_file_max_bytes <= 0:
+        return _error("invalid_arguments", "max_bytes and per_file_max_bytes must be positive integers.")
     repo_info = _require_repo(cwd)
     if isinstance(repo_info, dict):
         return repo_info
@@ -433,10 +600,10 @@ def git_show(
         )
 
     encoded = diff_result.stdout.encode("utf-8")
-    truncated = len(encoded) > max_bytes
-    diff_text = encoded[:max_bytes].decode("utf-8", errors="ignore") if truncated else diff_result.stdout
+    diff_text, start, consumed_end = _utf8_byte_page(encoded, offset=offset, max_bytes=max_bytes)
+    truncated = consumed_end < len(encoded)
 
-    return {
+    payload = {
         "success": True,
         "cwd": str(cwd),
         "repo_root": str(repo_root),
@@ -454,6 +621,12 @@ def git_show(
         "truncated": truncated,
         "total_bytes": len(encoded),
     }
+    return _fit_git_payload(
+        payload,
+        max_tokens=max_tokens,
+        byte_offset=start,
+        total_bytes=len(encoded),
+    )
 
 
 def git_blame(

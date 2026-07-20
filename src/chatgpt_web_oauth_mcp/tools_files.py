@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import re
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
@@ -15,6 +14,9 @@ from .files import read_files as read_files_impl
 from .files import write_file as write_file_impl
 from .patching import apply_patch as apply_patch_impl
 from .pathing import resolve_path
+from .reader import read_path as read_path_impl
+from .replacing import replace_files as replace_files_impl
+from .response_budget import ResponseBudget, with_budget_metadata
 from .search import glob_files as glob_files_impl
 from .search import grep_files as grep_files_impl
 from .tool_context import LOCAL_WRITE_TOOL, READ_ONLY_TOOL, ToolContext
@@ -47,6 +49,47 @@ def _with_batch_index(index: int, result: dict[str, object]) -> dict[str, object
 def register_file_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
     """Register local file, search, read, write, and patch tools."""
 
+    def _finalize_search_result(
+        result: dict[str, object],
+        *,
+        search_mode: str,
+        query: str | None,
+        offset: int,
+        max_tokens: int,
+    ) -> dict[str, object]:
+        result["mode"] = search_mode
+        if search_mode == "text" and query is not None:
+            result["query"] = query
+        if result.get("success") is not True:
+            return result
+        budget = ResponseBudget(max_tokens=max_tokens)
+        rendered, measurement = with_budget_metadata(
+            result,
+            budget=budget,
+            truncated=bool(result.get("truncated")),
+            stop_reason=str(result.get("stop_reason", "end_of_results")),
+        )
+        result_key = next(
+            (
+                key
+                for key in ("matches", "files", "counts")
+                if isinstance(rendered.get(key), list)
+            ),
+            None,
+        )
+        items = rendered.get(result_key) if result_key is not None else None
+        while not measurement.fits and isinstance(items, list) and items:
+            items.pop()
+            rendered["next_offset"] = max(offset, 0) + len(items)
+            rendered, measurement = with_budget_metadata(
+                rendered,
+                budget=budget,
+                truncated=True,
+                stop_reason="token_budget",
+            )
+            items = rendered.get(result_key) if result_key is not None else None
+        return rendered
+
     def _search_once(
         *,
         search_mode: str,
@@ -64,6 +107,9 @@ def register_file_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         include_hidden: bool,
         respect_gitignore: bool,
         exclude_patterns: list[str] | None,
+        file_type: str | None,
+        only_matching: bool,
+        max_tokens: int,
     ) -> dict[str, object]:
         target = resolve_path(path or ".", ctx.workspace_root)
 
@@ -81,10 +127,15 @@ def register_file_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
                 include_hidden=include_hidden,
                 respect_gitignore=respect_gitignore,
                 exclude_patterns=exclude_patterns,
+                max_tokens=max_tokens,
             )
-            if isinstance(result, dict):
-                result["mode"] = search_mode
-            return result
+            return _finalize_search_result(
+                result,
+                search_mode=search_mode,
+                query=query,
+                offset=offset,
+                max_tokens=max_tokens,
+            )
 
         if search_mode in {"regex", "text"}:
             effective_pattern = pattern
@@ -97,7 +148,7 @@ def register_file_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
                             "message": "mode=text requires `query`.",
                         },
                     }
-                effective_pattern = re.escape(query)
+                effective_pattern = query
             elif effective_pattern is None:
                 return {
                     "success": False,
@@ -118,12 +169,20 @@ def register_file_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
                 include_hidden=include_hidden,
                 respect_gitignore=respect_gitignore,
                 exclude_patterns=exclude_patterns,
+                file_type=file_type,
+                only_matching=only_matching,
+                fixed_strings=search_mode == "text",
+                regex_engine="default",
+                rg_binary=ctx.ripgrep_binary,
+                max_tokens=max_tokens,
             )
-            if isinstance(result, dict):
-                result["mode"] = search_mode
-                if search_mode == "text" and query is not None:
-                    result["query"] = query
-            return result
+            return _finalize_search_result(
+                result,
+                search_mode=search_mode,
+                query=query,
+                offset=offset,
+                max_tokens=max_tokens,
+            )
 
         return {
             "success": False,
@@ -152,6 +211,9 @@ def register_file_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         include_hidden: bool,
         respect_gitignore: bool,
         exclude_patterns: list[str] | None,
+        file_type: str | None,
+        only_matching: bool,
+        max_tokens: int,
     ) -> dict[str, object]:
         if not isinstance(item, dict):
             return _with_batch_index(
@@ -181,6 +243,9 @@ def register_file_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
                 include_hidden=bool(item.get("include_hidden", include_hidden)),
                 respect_gitignore=bool(item.get("respect_gitignore", respect_gitignore)),
                 exclude_patterns=item.get("exclude_patterns", exclude_patterns),
+                file_type=item.get("file_type", file_type),
+                only_matching=bool(item.get("only_matching", only_matching)),
+                max_tokens=max_tokens,
             )
         except (TypeError, ValueError) as exc:
             result = {
@@ -221,6 +286,16 @@ def register_file_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             list[str] | None,
             Field(description="Optional fnmatch-style patterns to exclude, matched against entry name and relative path."),
         ] = None,
+        sort: Annotated[
+            Literal["path", "modified", "size"],
+            Field(description="Stable ordering: path, newest modified first, or largest size first."),
+        ] = "path",
+        files_only: Annotated[bool, Field(description="Return files only.")] = False,
+        dirs_only: Annotated[bool, Field(description="Return directories only.")] = False,
+        filter: Annotated[
+            Literal["project", "all"],
+            Field(description="project applies hidden/junk/.gitignore filters; all disables built-in filtering."),
+        ] = "project",
     ) -> dict[str, object]:
         target = resolve_path(path or ".", ctx.workspace_root)
         return list_files_impl(
@@ -231,6 +306,11 @@ def register_file_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             include_hidden=include_hidden,
             respect_gitignore=respect_gitignore,
             exclude_patterns=exclude_patterns,
+            sort=sort,
+            files_only=files_only,
+            dirs_only=dirs_only,
+            filter_mode=filter,
+            max_tokens=ctx.tool_output_token_budget,
         )
 
     @mcp.tool(
@@ -262,7 +342,8 @@ def register_file_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             Field(
                 description=(
                     "Batch search requests. Each object accepts the same search fields "
-                    "as a single call, including mode/path/pattern/query/glob/output_mode."
+                    "as a single call, including mode/path/pattern/query/glob/output_mode, "
+                    "file_type, and only_matching."
                 )
             ),
         ] = None,
@@ -281,7 +362,7 @@ def register_file_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         ] = None,
         output_mode: Annotated[
             str,
-            Field(description="For regex/text search: content, files_with_matches, or count."),
+            Field(description="For regex/text search: content, files_with_matches, count, or summary."),
         ] = "content",
         before: Annotated[int, Field(description="Number of context lines before each regex/text match.")] = 0,
         after: Annotated[int, Field(description="Number of context lines after each regex/text match.")] = 0,
@@ -295,10 +376,22 @@ def register_file_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             list[str] | None,
             Field(description="Optional fnmatch-style patterns to exclude from search."),
         ] = None,
+        file_type: Annotated[
+            str | None,
+            Field(description="Optional ripgrep file type filter, such as py, rust, or js."),
+        ] = None,
+        only_matching: Annotated[
+            bool,
+            Field(description="For content output, return each matched substring instead of the full matching line."),
+        ] = False,
         max_concurrency: Annotated[
             int,
             Field(description="Maximum concurrent searches in parallel batch mode. Hard limit: 3.", ge=1, le=3),
         ] = MAX_SEARCH_BATCH_CONCURRENCY,
+        batch_offset: Annotated[
+            int,
+            Field(description="For queries batches, number of queries to skip for response pagination.", ge=0),
+        ] = 0,
     ) -> dict[str, object]:
         if queries is None:
             return _search_once(
@@ -317,6 +410,9 @@ def register_file_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
                 include_hidden=include_hidden,
                 respect_gitignore=respect_gitignore,
                 exclude_patterns=exclude_patterns,
+                file_type=file_type,
+                only_matching=only_matching,
+                max_tokens=ctx.tool_output_token_budget,
             )
 
         if not queries:
@@ -325,6 +421,8 @@ def register_file_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             return _invalid_search_arguments(
                 f"At most {MAX_SEARCH_BATCH_SIZE} searches may be executed in one batch."
             )
+        effective_batch_offset = max(batch_offset, 0)
+        selected_queries = queries[effective_batch_offset:]
         if max_concurrency < 1 or max_concurrency > MAX_SEARCH_BATCH_CONCURRENCY:
             return _invalid_search_arguments(
                 f"max_concurrency must be between 1 and {MAX_SEARCH_BATCH_CONCURRENCY}."
@@ -366,26 +464,37 @@ def register_file_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
                 include_hidden=include_hidden,
                 respect_gitignore=respect_gitignore,
                 exclude_patterns=exclude_patterns,
+                file_type=file_type,
+                only_matching=only_matching,
+                max_tokens=ctx.tool_output_token_budget,
             )
 
-        if execution_mode == "sequential":
-            results = [run_item(index, item) for index, item in enumerate(queries)]
+        if not selected_queries:
+            results = []
+            effective_concurrency = 0
+        elif execution_mode == "sequential":
+            results = [
+                run_item(index, item)
+                for index, item in enumerate(selected_queries, start=effective_batch_offset)
+            ]
             effective_concurrency = 1
         else:
-            effective_concurrency = min(max_concurrency, len(queries))
-            ordered_results: list[dict[str, object] | None] = [None] * len(queries)
+            effective_concurrency = min(max_concurrency, len(selected_queries))
+            ordered_results: list[dict[str, object] | None] = [None] * len(selected_queries)
             with ThreadPoolExecutor(max_workers=effective_concurrency) as executor:
                 futures = {
-                    executor.submit(run_item, index, item): index
-                    for index, item in enumerate(queries)
+                    executor.submit(run_item, index, item): local_index
+                    for local_index, (index, item) in enumerate(
+                        enumerate(selected_queries, start=effective_batch_offset)
+                    )
                 }
                 for future in as_completed(futures):
-                    index = futures[future]
-                    ordered_results[index] = future.result()
+                    local_index = futures[future]
+                    ordered_results[local_index] = future.result()
             results = [item for item in ordered_results if item is not None]
 
         failed_count = sum(1 for item in results if not item.get("success"))
-        return {
+        payload: dict[str, object] = {
             "success": failed_count == 0,
             "mode": "batch",
             "execution_mode": execution_mode,
@@ -394,7 +503,27 @@ def register_file_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             "failed_count": failed_count,
             "max_concurrency": effective_concurrency,
             "results": results,
+            "next_offset": None,
         }
+        budget = ResponseBudget(max_tokens=ctx.tool_output_token_budget)
+        rendered, measurement = with_budget_metadata(
+            payload,
+            budget=budget,
+            truncated=False,
+            stop_reason="end_of_results",
+        )
+        rendered_results = rendered.get("results")
+        while not measurement.fits and isinstance(rendered_results, list) and rendered_results:
+            rendered_results.pop()
+            rendered["next_offset"] = effective_batch_offset + len(rendered_results)
+            rendered, measurement = with_budget_metadata(
+                rendered,
+                budget=budget,
+                truncated=True,
+                stop_reason="token_budget",
+            )
+            rendered_results = rendered.get("results")
+        return rendered
 
     @mcp.tool(
         name="read_text",
@@ -403,6 +532,8 @@ def register_file_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         description=(
             "Canonical text-reader tool. Pass either `path` for single-file reads or "
             "`paths` for batch reads. Pagination is line-based via start_line/line_limit. "
+            "Byte- or token-limited pages stop between lines; a single line larger than either "
+            "budget is returned whole with oversized_line=true so pagination can advance. "
             "Set include_line_numbers=true when evidence or code-review output needs numbered lines."
         ),
     )
@@ -427,6 +558,10 @@ def register_file_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             bool,
             Field(description="Prefix returned lines with 1-based line numbers when true."),
         ] = False,
+        batch_offset: Annotated[
+            int,
+            Field(description="For paths batch reads, number of paths to skip for response pagination.", ge=0),
+        ] = 0,
     ) -> dict[str, object]:
         has_path = bool(path)
         has_paths = bool(paths)
@@ -450,6 +585,7 @@ def register_file_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
                 max_lines=200,
                 max_bytes=32768,
                 include_line_numbers=include_line_numbers,
+                max_tokens=ctx.read_token_budget,
             )
             if isinstance(result, dict):
                 result["mode"] = "single"
@@ -463,10 +599,63 @@ def register_file_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             max_lines=200,
             max_bytes=32768,
             include_line_numbers=include_line_numbers,
+            max_tokens=ctx.read_token_budget,
+            batch_offset=batch_offset,
         )
         if isinstance(result, dict):
             result["mode"] = "batch"
         return result
+
+    @mcp.tool(
+        name="read",
+        title="Read File",
+        annotations=READ_ONLY_TOOL,
+        description=(
+            "Unified file reader. mode=auto conservatively selects text, image metadata, "
+            "PDF text, or a binary hex preview. Text reads support explicit encodings and "
+            "report ambiguous encoding instead of silently replacing bytes. All modes use "
+            "the shared o200k token budget and return common pagination metadata."
+        ),
+    )
+    def read(
+        path: Annotated[str, Field(description="File to read. Relative paths resolve from workspace root.")],
+        mode: Annotated[
+            Literal["auto", "text", "image", "pdf", "hex"],
+            Field(description="Read mode. auto detects from MIME, suffix, BOM, and a bounded prefix."),
+        ] = "auto",
+        encoding: Annotated[
+            str | None,
+            Field(description="Explicit text encoding such as utf-8, utf-16le, gbk, or windows-1252."),
+        ] = None,
+        start_line: Annotated[int, Field(description="1-based first text line to return.", ge=1)] = 1,
+        line_limit: Annotated[int, Field(description="Maximum text lines to return.", ge=1)] = 200,
+        include_line_numbers: Annotated[
+            bool,
+            Field(description="Prefix text lines with 1-based line numbers."),
+        ] = False,
+        pages: Annotated[
+            str | None,
+            Field(description="PDF pages using 1-based ranges such as '1-5,8'. At most 20 pages."),
+        ] = None,
+        byte_offset: Annotated[int, Field(description="0-based byte offset for hex mode.", ge=0)] = 0,
+        byte_limit: Annotated[
+            int,
+            Field(description="Maximum bytes to inspect in hex mode (hard cap 262144).", ge=1),
+        ] = 4096,
+    ) -> dict[str, object]:
+        target = resolve_path(path, ctx.workspace_root)
+        return read_path_impl(
+            target,
+            mode=mode,
+            encoding=encoding,
+            start_line=start_line,
+            line_limit=line_limit,
+            include_line_numbers=include_line_numbers,
+            pages=pages,
+            byte_offset=byte_offset,
+            byte_limit=byte_limit,
+            max_tokens=ctx.read_token_budget,
+        )
 
     @mcp.tool(
         name="code_map_symbols",
@@ -493,9 +682,16 @@ def register_file_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             int,
             Field(description="Maximum number of symbols to return.", ge=1),
         ] = 500,
+        offset: Annotated[int, Field(description="Number of symbols to skip for pagination.", ge=0)] = 0,
     ) -> dict[str, object]:
         target = resolve_path(path, ctx.workspace_root)
-        return code_map_symbols_impl(path=target, language=language, limit=limit)
+        return code_map_symbols_impl(
+            path=target,
+            language=language,
+            limit=limit,
+            offset=offset,
+            max_tokens=ctx.tool_output_token_budget,
+        )
 
     @mcp.tool(
         name="code_map_references",
@@ -525,6 +721,7 @@ def register_file_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             int,
             Field(description="Maximum number of references to return.", ge=1),
         ] = 200,
+        offset: Annotated[int, Field(description="Number of references to skip for pagination.", ge=0)] = 0,
     ) -> dict[str, object]:
         target = resolve_path(path, ctx.workspace_root)
         return code_map_references_impl(
@@ -532,6 +729,8 @@ def register_file_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             symbol=symbol,
             glob_pattern=glob,
             limit=limit,
+            offset=offset,
+            max_tokens=ctx.tool_output_token_budget,
         )
 
     @mcp.tool(
@@ -557,9 +756,16 @@ def register_file_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             int,
             Field(description="Maximum number of per-file import entries to return.", ge=1),
         ] = 500,
+        offset: Annotated[int, Field(description="Number of import-bearing files to skip.", ge=0)] = 0,
     ) -> dict[str, object]:
         target = resolve_path(path, ctx.workspace_root)
-        return code_map_imports_impl(path=target, language=language, limit=limit)
+        return code_map_imports_impl(
+            path=target,
+            language=language,
+            limit=limit,
+            offset=offset,
+            max_tokens=ctx.tool_output_token_budget,
+        )
 
     @mcp.tool(
         name="write_file",
@@ -574,6 +780,57 @@ def register_file_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
     ) -> dict[str, object]:
         target = resolve_path(path, ctx.workspace_root)
         return write_file_impl(target, content=content, dry_run=dry_run)
+
+    @mcp.tool(
+        name="replace",
+        title="Batch Replace",
+        annotations=LOCAL_WRITE_TOOL,
+        description=(
+            "Deterministic mechanical replacement across one or more files. Each operation "
+            "contains path, rules, optional expected_revision, and optional encoding. Supports "
+            "literal or regex rules, dry_run, a batch-wide max_replacements guard, cross-process "
+            "locks, CAS checks, and same-directory atomic writes while preserving BOM, newline "
+            "style, encoding, and permissions. Use apply_patch for semantic code edits."
+        ),
+    )
+    def replace(
+        operations: Annotated[
+            list[dict[str, Any]],
+            Field(
+                description=(
+                    "Replacement operations. Each object requires path and rules=[{pattern, "
+                    "replacement, literal?, count?, ignore_case?, multiline?, dot_all?}]; "
+                    "expected_revision and encoding are optional."
+                )
+            ),
+        ],
+        dry_run: Annotated[
+            bool,
+            Field(description="Plan and validate replacements without modifying files."),
+        ] = False,
+        max_replacements: Annotated[
+            int,
+            Field(description="Batch-wide replacement ceiling; the whole batch is rejected if exceeded.", ge=1),
+        ] = 10000,
+    ) -> dict[str, object]:
+        resolved: list[dict[str, Any]] = []
+        for operation in operations:
+            if not isinstance(operation, dict) or not isinstance(operation.get("path"), str):
+                return {
+                    "success": False,
+                    "error": {
+                        "code": "invalid_arguments",
+                        "message": "Each operation requires a string path.",
+                    },
+                }
+            item = dict(operation)
+            item["path"] = resolve_path(str(operation["path"]), ctx.workspace_root)
+            resolved.append(item)
+        return replace_files_impl(
+            resolved,
+            dry_run=dry_run,
+            max_replacements=max_replacements,
+        )
 
     @mcp.tool(
         name="apply_patch",
@@ -612,9 +869,11 @@ def register_file_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         "list_files": list_files,
         "search": search,
         "read_text": read_text,
+        "read": read,
         "code_map_symbols": code_map_symbols,
         "code_map_references": code_map_references,
         "code_map_imports": code_map_imports,
         "write_file": write_file,
+        "replace": replace,
         "apply_patch": apply_patch,
     }

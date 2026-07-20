@@ -196,6 +196,8 @@ Useful commands:
 | `CHATGPT_MCP_CODEX_COMMAND` | no | `codex` |
 | `CHATGPT_MCP_COMMAND_TIMEOUT` | no | `120` |
 | `CHATGPT_MCP_DELEGATE_TIMEOUT` | no | `300` |
+| `CHATGPT_MCP_TOOL_OUTPUT_TOKEN_BUDGET` | no | `8500` |
+| `CHATGPT_MCP_JOB_OUTPUT_TOKEN_BUDGET` | no | inherits `CHATGPT_MCP_TOOL_OUTPUT_TOKEN_BUDGET` |
 | `CHATGPT_MCP_TMUX_BINARY` | no | `tmux` |
 | `CHATGPT_MCP_TMUX_SOCKET_NAME` | no | `default` |
 | `CHATGPT_MCP_TMUX_CONTROL_TIMEOUT` | no | `10` |
@@ -209,19 +211,27 @@ Useful commands:
 | `server_info` | Inspect runtime config and registered tools |
 | `set_default_cwd` / `get_default_cwd` | Manage session default working directory |
 | `env_snapshot` / `env_diff` | Read-only runtime diagnostics and inline environment snapshot comparison |
-| `list_files` | List files and directories |
-| `search` | Glob, regex, literal workspace search, or batch search with `mode="sequential"` / `mode="parallel"`; parallel batches cap `max_concurrency` at 3 |
-| `read_text` | Read one or more text files with pagination |
+| `list_files` | List files/directories with project-aware or unfiltered traversal, path/modified/size sorting, type filters, stable pagination, and shared token budgets |
+| `search` | Streaming glob, regex, literal workspace search, or batch search with `mode="sequential"` / `mode="parallel"`; ripgrep JSON and stderr are consumed with bounded memory and o200k token pagination |
+| `read_text` | Backward-compatible text reader for one or more files with line pagination and a shared batch token budget |
+| `read` | Unified text/explicit-encoding, image metadata/reference, PDF page text, and binary hex reader with common file metadata and token pagination |
 | `code_map_symbols` / `code_map_references` / `code_map_imports` | Lightweight definitions, textual references, and import mapping |
 | `write_file` | Write full file contents, with dry-run support |
+| `replace` | CAS-protected mechanical multi-file/multi-rule replacement with dry-run, a batch replacement ceiling, cross-process locks, atomic writes, and BOM/newline/encoding/permission preservation |
 | `apply_patch` | Apply structured patches to existing files |
 | `git_status` / `git_diff` / `git_commit` / `git_log` / `git_show` / `git_blame` | Structured git operations |
 | `git_worktree_create` / `git_worktree_list` / `git_worktree_status` / `git_worktree_remove` | Tiny generic git worktree lifecycle |
 | `run_command` | Run one shell command, or run multiple commands with `mode="sequential"` or `mode="parallel"`; timeout is capped at 300s unless `force=true` is used after explicit user approval; parallel batches cap `max_concurrency` at 3 |
-| `job_start` / `job_status` / `job_tail` / `job_kill` | Tiny in-process background job runner with stdout/stderr logs under the state directory |
+| `job_start` / `job_list` / `job_status` / `job_output` / `job_tail` / `job_kill` | Durable background jobs with disk-registry discovery, independent stdout/stderr raw-byte cursor reads, and backward-compatible last-N-lines tailing |
 | `tmux_list` / `tmux_start` / `tmux_status` / `tmux_capture` / `tmux_send` / `tmux_kill` | Persistent interactive TTY sessions using the configured tmux socket; text input uses stdin-backed tmux buffers and capture output is a bounded terminal snapshot |
 | `delegate_task` | Run one serialized, bounded Codex execution slice; optionally override `model` and `reasoning_effort` for that call; wait up to 300s by default, then return status/log paths or `status=running` with readable log paths while Codex continues; raw stdout/stderr stay in log files |
 | `delegate_status` | Read-only active/recent delegate status list with server-generated `delegate_id` values and log paths; supports `watch_seconds` long-polling up to 300s |
+
+Token-aware read-only responses use the `o200k_base` encoding and expose a common
+`complete` / `partial`, `estimated_tokens`, `effective_budget`, `truncated`,
+`stop_reason`, and continuation offset contract. Batch `read_text`, `search`, and
+`run_command` calls apply one shared response budget rather than multiplying the
+configured ceiling by the number of child requests.
 
 ## Security notes
 
@@ -239,7 +249,7 @@ Recommended defaults:
 
 ## Tmux usage model
 
-Use `run_command` for short commands, `job_*` for non-interactive background processes with separate stdout/stderr logs, and `tmux_*` for interactive programs that need a persistent pseudo-terminal. The tmux tools deliberately expose one primary-pane workflow: create a detached session, list or inspect it, capture recent terminal history, paste text or send allowlisted keys, and remove the session.
+Use `run_command` for short commands, durable `job_*` tools for non-interactive background processes with separate stdout/stderr logs, and `tmux_*` for interactive programs that need a persistent pseudo-terminal. `job_list` discovers jobs from the current state directory after server restarts; `job_output` advances an independent raw-byte cursor for one selected stream, while `job_tail` remains the last-N-lines compatibility API. The tmux tools deliberately expose one primary-pane workflow: create a detached session, list or inspect it, capture recent terminal history, paste text or send allowlisted keys, and remove the session.
 
 `tmux_capture` is not a complete application log. It returns the current pane screen and retained tmux history, so full-screen TUIs, progress bars, carriage-return updates, and history limits affect the result. For tools such as Codex CLI, prefer modes such as `--no-alt-screen` when the terminal history must remain observable.
 

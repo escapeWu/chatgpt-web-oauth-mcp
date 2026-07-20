@@ -16,6 +16,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from pathlib import PureWindowsPath
 
+from .response_budget import (
+    DEFAULT_TOOL_OUTPUT_TOKEN_BUDGET,
+    ResponseBudget,
+    with_budget_metadata,
+)
+
 
 ALLOWED_COMMIT_MODES = {"allowed", "required", "forbidden"}
 ALLOWED_REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
@@ -142,26 +148,30 @@ def _format_epoch_seconds(value: float) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(value))
 
 
-def _status_entry_signature(entry: dict[str, object] | None) -> tuple[object, ...]:
+def _status_entry_lifecycle_signature(entry: dict[str, object] | None) -> tuple[object, ...]:
     if not entry:
         return ("none",)
+    error = entry.get("error")
+    error_outcome: object = error
+    if isinstance(error, dict):
+        error_outcome = (error.get("code"), error.get("message"))
     return (
         entry.get("delegate_id"),
         entry.get("status"),
         entry.get("completed"),
         entry.get("in_progress"),
+        entry.get("success"),
         entry.get("exit_code"),
         entry.get("timed_out"),
-        entry.get("soft_timeout_elapsed"),
-        entry.get("activity_state"),
+        error_outcome,
     )
 
 
-def _status_response_signature(payload: dict[str, object]) -> tuple[object, ...]:
+def _status_response_lifecycle_signature(payload: dict[str, object]) -> tuple[object, ...]:
     if payload.get("delegate"):
-        return ("delegate", *_status_entry_signature(payload.get("delegate")))  # type: ignore[arg-type]
+        return ("delegate", *_status_entry_lifecycle_signature(payload.get("delegate")))  # type: ignore[arg-type]
     latest = payload.get("active") or payload.get("latest")
-    return ("list", *_status_entry_signature(latest if isinstance(latest, dict) else None))
+    return ("list", *_status_entry_lifecycle_signature(latest if isinstance(latest, dict) else None))
 
 
 def _status_focus_entry(payload: dict[str, object]) -> dict[str, object] | None:
@@ -633,8 +643,15 @@ class ExecutorRegistry:
             )
             self._history.append(snapshot)
 
-    def _delegate_status_once(self, *, delegate_id: str | None, limit: int) -> dict[str, object]:
+    def _delegate_status_once(
+        self,
+        *,
+        delegate_id: str | None,
+        limit: int,
+        offset: int = 0,
+    ) -> dict[str, object]:
         limit = max(1, min(int(limit), DEFAULT_DELEGATE_HISTORY_LIMIT))
+        offset = max(0, int(offset))
         with self._lock:
             active = self._active
             history = list(self._history)
@@ -656,44 +673,91 @@ class ExecutorRegistry:
                     "message": f"Delegate not found: {normalized_delegate_id}",
                 },
                 "active": active_snapshot if active_snapshot and active_snapshot.get("in_progress") else None,
-                "recent": list(reversed(history))[:limit],
+                "recent": list(reversed(history))[offset : offset + limit],
             }
 
-        recent: list[dict[str, object]] = []
+        all_recent: list[dict[str, object]] = []
         seen: set[str] = set()
         if active_snapshot is not None:
-            recent.append(active_snapshot)
+            all_recent.append(active_snapshot)
             seen.add(str(active_snapshot.get("delegate_id")))
         for item in reversed(history):
             item_id = str(item.get("delegate_id"))
             if item_id in seen:
                 continue
-            recent.append(item)
+            all_recent.append(item)
             seen.add(item_id)
-            if len(recent) >= limit:
-                break
+        recent = all_recent[offset : offset + limit]
         active_running = active_snapshot if active_snapshot and active_snapshot.get("in_progress") else None
         return {
             "success": True,
             "active": active_running,
-            "latest": recent[0] if recent else None,
+            "latest": all_recent[0] if all_recent else None,
             "recent": recent,
             "history_limit": DEFAULT_DELEGATE_HISTORY_LIMIT,
+            "truncated": offset + len(recent) < len(all_recent),
+            "next_offset": offset + len(recent) if offset + len(recent) < len(all_recent) else None,
         }
+
+    def _budget_delegate_status(
+        self,
+        payload: dict[str, object],
+        *,
+        max_tokens: int,
+        offset: int,
+    ) -> dict[str, object]:
+        budget = ResponseBudget(max_tokens=max_tokens)
+        truncated = bool(payload.get("truncated"))
+        rendered, measurement = with_budget_metadata(
+            payload,
+            budget=budget,
+            truncated=truncated,
+            stop_reason="limit" if truncated else "end_of_results",
+        )
+        recent = rendered.get("recent")
+        while not measurement.fits and isinstance(recent, list) and recent:
+            recent.pop()
+            rendered["next_offset"] = offset + len(recent)
+            rendered, measurement = with_budget_metadata(
+                rendered,
+                budget=budget,
+                truncated=True,
+                stop_reason="token_budget",
+            )
+            recent = rendered.get("recent")
+        return rendered
 
     def delegate_status(
         self,
         *,
         delegate_id: str | None = None,
         limit: int = 10,
+        offset: int = 0,
         watch_seconds: float = 0.0,
         poll_seconds: float = DEFAULT_DELEGATE_STATUS_POLL_SECONDS,
+        max_tokens: int = DEFAULT_TOOL_OUTPUT_TOKEN_BUDGET,
     ) -> dict[str, object]:
         watch_seconds = max(0.0, min(float(watch_seconds), MAX_DELEGATE_STATUS_WATCH_SECONDS))
         poll_seconds = max(0.1, min(float(poll_seconds), 60.0))
-        initial = self._delegate_status_once(delegate_id=delegate_id, limit=limit)
+        def finalize(payload: dict[str, object]) -> dict[str, object]:
+            return self._budget_delegate_status(
+                payload,
+                max_tokens=max_tokens,
+                offset=max(0, int(offset)),
+            )
+
+        def status_once() -> dict[str, object]:
+            if offset:
+                return self._delegate_status_once(
+                    delegate_id=delegate_id,
+                    limit=limit,
+                    offset=offset,
+                )
+            return self._delegate_status_once(delegate_id=delegate_id, limit=limit)
+
+        initial = status_once()
         if watch_seconds <= 0:
-            return initial
+            return finalize(initial)
 
         started_at = time.monotonic()
         if initial.get("success") is False:
@@ -706,7 +770,7 @@ class ExecutorRegistry:
                 "poll_seconds": poll_seconds,
                 "elapsed_seconds": round(time.monotonic() - started_at, 3),
             }
-            return initial
+            return finalize(initial)
 
         initial_focus = _status_focus_entry(initial)
         if initial_focus and initial_focus.get("completed"):
@@ -719,17 +783,17 @@ class ExecutorRegistry:
                 "poll_seconds": poll_seconds,
                 "elapsed_seconds": round(time.monotonic() - started_at, 3),
             }
-            return initial
+            return finalize(initial)
 
         deadline = started_at + watch_seconds
-        initial_signature = _status_response_signature(initial)
+        initial_signature = _status_response_lifecycle_signature(initial)
         current = initial
         while time.monotonic() < deadline:
             sleep_for = min(poll_seconds, max(0.0, deadline - time.monotonic()))
             if sleep_for > 0:
                 time.sleep(sleep_for)
-            current = self._delegate_status_once(delegate_id=delegate_id, limit=limit)
-            if _status_response_signature(current) != initial_signature:
+            current = status_once()
+            if _status_response_lifecycle_signature(current) != initial_signature:
                 current["watch"] = {
                     "enabled": True,
                     "status_changed": True,
@@ -738,7 +802,7 @@ class ExecutorRegistry:
                     "poll_seconds": poll_seconds,
                     "elapsed_seconds": round(time.monotonic() - started_at, 3),
                 }
-                return current
+                return finalize(current)
 
         current["watch"] = {
             "enabled": True,
@@ -748,7 +812,7 @@ class ExecutorRegistry:
             "poll_seconds": poll_seconds,
             "elapsed_seconds": round(time.monotonic() - started_at, 3),
         }
-        return current
+        return finalize(current)
 
     def _wait_for_active(
         self,

@@ -34,6 +34,10 @@ src/chatgpt_web_oauth_mcp/
 ├── oauth.py       # OAuth dynamic registration, PKCE, token store, metadata
 ├── http_compat.py # ChatGPT-compatible HTTP/OAuth/MCP compatibility layer
 ├── pathing.py     # Path resolution: relative -> absolute under WORKSPACE_ROOT
+├── response_budget.py # Shared o200k response measurement and common pagination metadata
+├── content_io.py  # Strict text encoding/BOM/newline detection and lossless re-encoding
+├── reader.py      # Unified text/image/PDF/hex reader
+├── replacing.py   # Locked CAS mechanical batch replacement and atomic writes
 ├── envtools.py    # Read-only environment snapshots and inline snapshot diffs
 ├── code_map.py    # Lightweight symbol/reference/import mapping
 ├── files.py       # list_files, read_text, write_file
@@ -51,16 +55,18 @@ src/chatgpt_web_oauth_mcp/
 | `server_info` | Inspect runtime config and available MCP tools |
 | `set_default_cwd` / `get_default_cwd` | Manage session default working directory |
 | `env_snapshot` / `env_diff` | Read-only runtime diagnostics and inline snapshot comparison |
-| `list_files` | List directory contents |
+| `list_files` | Ignore-aware directory listing with sort/type filters, stable pagination, and token budgets |
 | `search` | Glob, regex, literal text search, or batch search with `mode="sequential"` / `mode="parallel"`; parallel batches cap `max_concurrency` at 3 |
-| `read_text` | Single/batch text reader with pagination |
+| `read_text` | Backward-compatible single/batch text reader with line pagination and a shared batch budget |
+| `read` | Unified text/encoding, image, PDF-page, and binary-hex reader |
 | `code_map_symbols` / `code_map_references` / `code_map_imports` | Tiny read-only code map for definitions, textual references, and imports |
 | `write_file` | Create or overwrite a file, with dry-run support |
+| `replace` | CAS-protected mechanical batch replacement with locking, atomic writes, and format preservation |
 | `apply_patch` | Structured patch editing for existing files |
 | `git_status` / `git_diff` / `git_commit` / `git_log` / `git_show` / `git_blame` | Structured git workflows |
 | `git_worktree_create` / `git_worktree_list` / `git_worktree_status` / `git_worktree_remove` | Tiny generic git worktree lifecycle |
 | `run_command` | Execute one shell command, or multiple commands with `mode="sequential"` or `mode="parallel"`; timeout is capped at 300s unless `force=true` is used after explicit user approval; parallel batches cap `max_concurrency` at 3 |
-| `job_start` / `job_status` / `job_tail` / `job_kill` | Tiny generic in-process background job runner with stdout/stderr logs under the state directory; no scheduler, resume, dependencies, or artifact tracking |
+| `job_start` / `job_list` / `job_status` / `job_output` / `job_tail` / `job_kill` | Durable generic background jobs with disk-registry discovery, per-stream byte-cursor output, and backward-compatible last-N-lines tailing; no scheduler, restart, dependencies, or artifact tracking |
 | `tmux_list` / `tmux_start` / `tmux_status` / `tmux_capture` / `tmux_send` / `tmux_kill` | Tiny persistent interactive TTY lifecycle; one primary-pane workflow, bounded capture, stdin-buffer text paste, and no attach or server-wide kill tool |
 | `delegate_task` | Run one serialized, bounded Codex execution slice; wait up to 300s by default, then return either the result or `status=running` with readable log paths while Codex continues |
 | `delegate_status` | Read-only active/recent delegate status list with server-generated `delegate_id` values and log paths; supports `watch_seconds` long-polling up to 300s |

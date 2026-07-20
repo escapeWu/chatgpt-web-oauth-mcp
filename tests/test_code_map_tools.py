@@ -8,6 +8,7 @@ from chatgpt_web_oauth_mcp.code_map import (
     code_map_references,
     code_map_symbols,
 )
+from chatgpt_web_oauth_mcp.response_budget import ResponseBudget, render_json_payload
 
 
 def _call(tool, *args, **kwargs):
@@ -167,6 +168,20 @@ def test_limit_sets_truncated_true(tmp_path: Path) -> None:
     assert result["success"] is True
     assert [item["name"] for item in result["symbols"]] == ["one", "two"]
     assert result["truncated"] is True
+
+
+def test_code_map_symbols_token_budget_has_lossless_offset(tmp_path: Path) -> None:
+    target = tmp_path / "many.py"
+    target.write_text(
+        "\n".join(f"def function_{index}_with_a_long_name(): pass" for index in range(100)),
+        encoding="utf-8",
+    )
+
+    result = code_map_symbols(path=tmp_path, limit=100, max_tokens=400)
+
+    assert result["partial"] is True
+    assert result["next_offset"] == len(result["symbols"])
+    assert ResponseBudget(max_tokens=400).count_tokens(render_json_payload(result)) <= 400
 
 
 def test_unsupported_language_returns_structured_error(tmp_path: Path) -> None:

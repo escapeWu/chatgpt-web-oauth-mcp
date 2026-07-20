@@ -147,7 +147,12 @@ def register_tmux_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             Field(description="Join soft-wrapped terminal lines using tmux capture-pane -J."),
         ] = True,
     ) -> dict[str, object]:
-        return client().capture(session=session, lines=lines, join_wrapped=join_wrapped)
+        return client().capture(
+            session=session,
+            lines=lines,
+            join_wrapped=join_wrapped,
+            max_tokens=ctx.tool_output_token_budget,
+        )
 
     @mcp.tool(
         name="tmux_send",

@@ -5,6 +5,8 @@ import shlex
 import sys
 from pathlib import Path
 
+import pytest
+
 from chatgpt_web_oauth_mcp.executors import ExecutorRegistry
 from chatgpt_web_oauth_mcp.shell import MAX_COMMAND_TIMEOUT_SECONDS
 
@@ -209,6 +211,57 @@ def test_server_run_command_timeout_limit_requires_force(tmp_path: Path) -> None
     assert forced["stdout"].strip() == "forced"
 
 
+def test_server_run_command_uses_runtime_output_limits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from chatgpt_web_oauth_mcp import server
+
+    monkeypatch.setattr(server, "RUN_TOKEN_BUDGET", 40)
+    monkeypatch.setattr(server, "RUN_CAPTURE_MAX_BYTES", 2048)
+    result = _call(
+        server.run_command,
+        command=_python_cmd("[print(f'line-{index:03d}') for index in range(200)]"),
+        cwd=str(tmp_path),
+        timeout=5,
+    )
+
+    metadata = result["output_metadata"]["aggregate"]
+    assert result["success"] is True
+    assert metadata["effective_token_budget"] == 40
+    assert metadata["capture_memory_limit_bytes"] == 2048
+    assert metadata["token_count"] <= 40
+    assert metadata["displayed_payload_fits"] is True
+
+
+def test_server_job_reads_use_runtime_output_token_budgets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from chatgpt_web_oauth_mcp import server
+
+    observed: list[tuple[str, int]] = []
+
+    class CapturingRegistry:
+        def list_jobs(self, **kwargs):
+            observed.append(("list", kwargs["max_tokens"]))
+            return {"success": True}
+
+        def output_job(self, **kwargs):
+            observed.append(("output", kwargs["max_tokens"]))
+            return {"success": True}
+
+    monkeypatch.setattr(server, "STATE_DIR", tmp_path / "state")
+    monkeypatch.setattr(server, "TOOL_OUTPUT_TOKEN_BUDGET", 222)
+    monkeypatch.setattr(server, "JOB_OUTPUT_TOKEN_BUDGET", 111)
+    monkeypatch.setattr(server, "job_registry", CapturingRegistry())
+
+    _call(server.job_list)
+    _call(server.job_output, job_id="job_runtime_budget")
+
+    assert observed == [("list", 222), ("output", 111)]
+
+
 def test_server_read_text_supports_single_and_batch_modes(tmp_path: Path) -> None:
     from chatgpt_web_oauth_mcp import server
 
@@ -251,6 +304,65 @@ def test_server_read_text_can_include_line_numbers(tmp_path: Path) -> None:
     assert single["success"] is True
     assert single["mode"] == "single"
     assert single["content"] == "2: beta\n3: gamma"
+
+
+def test_server_read_text_uses_runtime_read_token_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from chatgpt_web_oauth_mcp import server
+
+    target = tmp_path / "tokens.txt"
+    target.write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
+    monkeypatch.setattr(server, "READ_TOKEN_BUDGET", 3)
+
+    first = _call(server.read_text, path=str(target), line_limit=10)
+    second = _call(
+        server.read_text,
+        path=str(target),
+        start_line=first["next_offset"],
+        line_limit=10,
+    )
+
+    assert first["content"] == "alpha\nbeta"
+    assert first["next_offset"] == 3
+    assert first["page"]["stop_reason"] == "token_budget"
+    assert first["page"]["effective_budgets"]["tokens"] == 3
+    assert second["content"] == "gamma"
+    assert second["next_offset"] is None
+
+
+def test_server_read_text_uses_lossless_byte_pagination_for_batch(tmp_path: Path) -> None:
+    from chatgpt_web_oauth_mcp import server
+
+    first = tmp_path / "one.txt"
+    second = tmp_path / "two.txt"
+    oversized = "x" * 33000
+    first.write_text(f"head\n{oversized}\ntail\n", encoding="utf-8")
+    second.write_text(f"start\n{oversized}\nend\n", encoding="utf-8")
+
+    batch = _call(
+        server.read_text,
+        paths=[str(first), str(second)],
+        start_line=1,
+        line_limit=3,
+    )
+    oversized_page = _call(
+        server.read_text,
+        path=str(first),
+        start_line=batch["results"][0]["next_offset"],
+        line_limit=3,
+    )
+
+    assert [item["content"] for item in batch["results"]] == ["head", "start"]
+    assert [item["end_line"] for item in batch["results"]] == [1, 1]
+    assert [item["next_offset"] for item in batch["results"]] == [2, 2]
+    assert oversized_page["content"] == oversized
+    assert oversized_page["oversized_line"] is True
+    assert oversized_page["end_line"] == 2
+    assert oversized_page["next_offset"] == 3
+    assert oversized_page["page"]["stop_reason"] == "byte_budget"
+    assert oversized_page["page"]["budget_exceeded"] == {"bytes": True, "tokens": False}
 
 
 def test_server_read_text_requires_exactly_one_path_argument(tmp_path: Path) -> None:
@@ -298,6 +410,70 @@ def test_server_search_supports_single_file_path_for_text_and_regex(tmp_path: Pa
     assert regex_result["mode"] == "regex"
     assert len(regex_result["matches"]) == 1
     assert regex_result["matches"][0]["path"] == str(target)
+
+
+def test_server_search_exposes_ripgrep_controls_and_literal_text(tmp_path: Path) -> None:
+    from chatgpt_web_oauth_mcp import server
+
+    python_file = tmp_path / "one.py"
+    text_file = tmp_path / "two.txt"
+    python_file.write_text("标签 [x] [x]\n", encoding="utf-8")
+    text_file.write_text("标签 [x]\n", encoding="utf-8")
+
+    content = _call(
+        server.search,
+        mode="text",
+        path=str(tmp_path),
+        query="[x]",
+        file_type="py",
+        only_matching=True,
+    )
+    summary = _call(
+        server.search,
+        mode="text",
+        path=str(tmp_path),
+        query="[x]",
+        output_mode="summary",
+        limit=1,
+        offset=50,
+    )
+
+    assert [match["line"] for match in content["matches"]] == ["[x]", "[x]"]
+    assert {match["path"] for match in content["matches"]} == {str(python_file)}
+    assert summary["summary"] == {"occurrences": 3, "matched_files": 2}
+
+
+def test_server_search_uses_runtime_ripgrep_binary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from chatgpt_web_oauth_mcp import server
+
+    (tmp_path / "one.txt").write_text("hello\n", encoding="utf-8")
+    monkeypatch.setattr(server, "RIPGREP_BINARY", "/missing/runtime/rg")
+
+    result = _call(server.search, mode="text", path=str(tmp_path), query="hello")
+
+    assert result["success"] is False
+    assert result["error"]["code"] == "backend_unavailable"
+    assert result["backend"]["binary"] == "/missing/runtime/rg"
+
+
+def test_server_search_regex_uses_rust_regex_semantics(tmp_path: Path) -> None:
+    from chatgpt_web_oauth_mcp import server
+
+    (tmp_path / "one.txt").write_text("hello world\n", encoding="utf-8")
+
+    result = _call(
+        server.search,
+        mode="regex",
+        path=str(tmp_path),
+        pattern=r"hello(?= world)",
+    )
+
+    assert result["success"] is False
+    assert result["error"]["code"] == "invalid_pattern"
+    assert "Rust regex syntax" in result["error"]["message"]
 
 
 def test_server_delegate_task_accepts_structured_fields(tmp_path: Path) -> None:
@@ -443,6 +619,9 @@ def test_code_map_descriptions_explain_development_usage() -> None:
     assert "code_map_imports to inspect module boundaries" in server.MCP_INSTRUCTIONS
     assert "files_in_scope" in server.MCP_INSTRUCTIONS
     assert "precise rename, type inference, or call graph analysis" in server.MCP_INSTRUCTIONS
+    assert "job_list discovers records from the current state directory" in server.MCP_INSTRUCTIONS
+    assert "raw-byte cursor" in server.MCP_INSTRUCTIONS
+    assert "job_tail remains the backward-compatible last-N-lines API" in server.MCP_INSTRUCTIONS
 
     assert "before edits or reviews" in descriptions["code_map_symbols"]
     assert "candidate files_in_scope" in descriptions["code_map_symbols"]
@@ -502,7 +681,7 @@ def test_registered_tool_input_schemas_document_parameters() -> None:
     assert any(choice.get("type") == "string" for choice in model_schema["anyOf"])
     for name in ["command", "commands", "mode", "max_concurrency", "force"]:
         assert name in schemas["run_command"]["properties"]
-    for name in ["queries", "mode", "max_concurrency"]:
+    for name in ["queries", "mode", "max_concurrency", "file_type", "only_matching"]:
         assert name in schemas["search"]["properties"]
     for name in ["cwd", "include_packages"]:
         assert name in schemas["env_snapshot"]["properties"]
@@ -517,6 +696,10 @@ def test_registered_tool_input_schemas_document_parameters() -> None:
         assert name in schemas["git_worktree_create"]["properties"]
     for name in ["path", "force"]:
         assert name in schemas["git_worktree_remove"]["properties"]
+    for name in ["status", "offset", "limit"]:
+        assert name in schemas["job_list"]["properties"]
+    for name in ["job_id", "stream", "cursor", "max_bytes", "wait_ms"]:
+        assert name in schemas["job_output"]["properties"]
     assert schemas["run_command"]["properties"]["mode"]["enum"] == [
         "sequential",
         "parallel",
@@ -568,6 +751,8 @@ def test_server_tools_expose_chatgpt_compatible_annotations() -> None:
     assert annotations["git_worktree_status"]["readOnlyHint"] is True
     assert annotations["git_worktree_remove"]["destructiveHint"] is True
     assert annotations["run_command"]["openWorldHint"] is True
+    assert annotations["job_list"]["readOnlyHint"] is True
+    assert annotations["job_output"]["readOnlyHint"] is True
     assert annotations["delegate_task"]["openWorldHint"] is True
     assert annotations["delegate_status"]["readOnlyHint"] is True
     for removed in [

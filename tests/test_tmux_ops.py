@@ -12,6 +12,7 @@ import uuid
 import pytest
 
 from chatgpt_web_oauth_mcp import tmux_ops
+from chatgpt_web_oauth_mcp.response_budget import ResponseBudget, render_json_payload
 from chatgpt_web_oauth_mcp.tmux_ops import MAX_CAPTURE_LINES, MAX_CAPTURE_OUTPUT_LINES, TmuxClient
 
 
@@ -159,6 +160,23 @@ def test_tmux_capture_enforces_hard_line_limit(monkeypatch) -> None:
     assert result["lines_returned"] == MAX_CAPTURE_OUTPUT_LINES
     assert result["truncated_by_line_limit"] is True
     assert result["lines"][0] == "line-50"
+
+
+def test_tmux_capture_applies_token_budget_to_whole_snapshot(monkeypatch) -> None:
+    client = TmuxClient(socket_name="test")
+    monkeypatch.setattr(client, "_require_session_rows", lambda session: [_pane_row()])
+
+    def fake_run(args, *, input_bytes=None):
+        output = "\n".join((f"line-{index} " + "内容" * 30) for index in range(100)).encode()
+        return tmux_ops._RunResult(0, output, b"")
+
+    monkeypatch.setattr(client, "_run", fake_run)
+    result = client.capture(session="probe", lines=100, max_tokens=400)
+
+    assert result["partial"] is True
+    assert result["truncated_by_token_budget"] is True
+    assert result["lines"][-1].startswith("line-99")
+    assert ResponseBudget(max_tokens=400).count_tokens(render_json_payload(result)) <= 400
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux is not installed")

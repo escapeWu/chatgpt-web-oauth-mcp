@@ -7,6 +7,11 @@ import re
 
 from .files import DEFAULT_EXCLUDE_DIR_NAMES
 from .search import grep_files
+from .response_budget import (
+    DEFAULT_TOOL_OUTPUT_TOKEN_BUDGET,
+    ResponseBudget,
+    with_budget_metadata,
+)
 
 
 SUPPORTED_LANGUAGES = {"python", "typescript", "javascript"}
@@ -181,7 +186,14 @@ def _js_symbols(path: Path, text: str) -> list[dict[str, object]]:
     return symbols
 
 
-def code_map_symbols(*, path: Path, language: str = "python", limit: int = 500) -> dict[str, object]:
+def code_map_symbols(
+    *,
+    path: Path,
+    language: str = "python",
+    limit: int = 500,
+    offset: int = 0,
+    max_tokens: int = DEFAULT_TOOL_OUTPUT_TOKEN_BUDGET,
+) -> dict[str, object]:
     language_error = _validate_language(language)
     if language_error:
         return language_error
@@ -196,11 +208,15 @@ def code_map_symbols(*, path: Path, language: str = "python", limit: int = 500) 
     errors: list[dict[str, object]] = []
     truncated = False
     scanned_files = 0
+    seen = 0
+    start = max(offset, 0)
+    budget = ResponseBudget(max_tokens=max_tokens)
     for source in _iter_source_files(path, language=language):
         scanned_files += 1
         text = _read_text(source)
         if text is None:
             continue
+        parse_error = None
         if language == "python":
             file_symbols, parse_error = _python_symbols(source, text)
             if parse_error:
@@ -208,15 +224,59 @@ def code_map_symbols(*, path: Path, language: str = "python", limit: int = 500) 
         else:
             file_symbols = _js_symbols(source, text)
 
+        if errors:
+            error_candidate = {
+                "success": True,
+                "path": str(path),
+                "language": language,
+                "symbols": symbols,
+                "scanned_files": scanned_files,
+                "errors": errors,
+                "next_offset": start + len(symbols),
+            }
+            _rendered, error_measurement = with_budget_metadata(
+                error_candidate,
+                budget=budget,
+                truncated=True,
+                stop_reason="token_budget",
+            )
+            if not error_measurement.fits:
+                if parse_error:
+                    errors.pop()
+                truncated = True
+                break
+
         for symbol in file_symbols:
+            if seen < start:
+                seen += 1
+                continue
             if len(symbols) >= limit:
                 truncated = True
                 break
+            candidate = {
+                "success": True,
+                "path": str(path),
+                "language": language,
+                "symbols": [*symbols, symbol],
+                "scanned_files": scanned_files,
+                "errors": errors,
+                "next_offset": start + len(symbols) + 1,
+            }
+            _rendered, measurement = with_budget_metadata(
+                candidate,
+                budget=budget,
+                truncated=True,
+                stop_reason="token_budget",
+            )
+            if not measurement.fits:
+                truncated = True
+                break
             symbols.append(symbol)
+            seen += 1
         if truncated:
             break
 
-    return {
+    payload = {
         "success": True,
         "path": str(path),
         "language": language,
@@ -224,7 +284,15 @@ def code_map_symbols(*, path: Path, language: str = "python", limit: int = 500) 
         "truncated": truncated,
         "scanned_files": scanned_files,
         "errors": errors,
+        "next_offset": start + len(symbols) if truncated else None,
     }
+    rendered, _measurement = with_budget_metadata(
+        payload,
+        budget=budget,
+        truncated=truncated,
+        stop_reason="token_budget" if truncated and len(symbols) < limit else ("limit" if truncated else "end_of_results"),
+    )
+    return rendered
 
 
 def _reference_pattern(symbol: str) -> str:
@@ -238,6 +306,8 @@ def code_map_references(
     symbol: str,
     glob_pattern: str | None = "*.py",
     limit: int = 200,
+    offset: int = 0,
+    max_tokens: int = DEFAULT_TOOL_OUTPUT_TOKEN_BUDGET,
 ) -> dict[str, object]:
     normalized_symbol = symbol.strip()
     if not normalized_symbol:
@@ -252,9 +322,10 @@ def code_map_references(
         glob_pattern=glob_pattern,
         output_mode="content",
         head_limit=limit,
-        offset=0,
+        offset=offset,
         include_hidden=False,
         respect_gitignore=True,
+        max_tokens=max_tokens,
     )
     if not result.get("success"):
         return result
@@ -268,7 +339,7 @@ def code_map_references(
         for item in result.get("matches", [])
         if isinstance(item, dict)
     ]
-    return {
+    payload = {
         "success": True,
         "path": str(path),
         "symbol": normalized_symbol,
@@ -277,6 +348,13 @@ def code_map_references(
         "truncated": bool(result.get("truncated")),
         "next_offset": result.get("next_offset"),
     }
+    rendered, _measurement = with_budget_metadata(
+        payload,
+        budget=ResponseBudget(max_tokens=max_tokens),
+        truncated=bool(result.get("truncated")),
+        stop_reason=str(result.get("stop_reason", "end_of_results")),
+    )
+    return rendered
 
 
 def _append_unique(items: list[str], value: str) -> None:
@@ -322,7 +400,14 @@ def _js_imports(text: str) -> list[str]:
     return imports
 
 
-def code_map_imports(*, path: Path, language: str = "python", limit: int = 500) -> dict[str, object]:
+def code_map_imports(
+    *,
+    path: Path,
+    language: str = "python",
+    limit: int = 500,
+    offset: int = 0,
+    max_tokens: int = DEFAULT_TOOL_OUTPUT_TOKEN_BUDGET,
+) -> dict[str, object]:
     language_error = _validate_language(language)
     if language_error:
         return language_error
@@ -337,11 +422,15 @@ def code_map_imports(*, path: Path, language: str = "python", limit: int = 500) 
     errors: list[dict[str, object]] = []
     truncated = False
     scanned_files = 0
+    seen = 0
+    start = max(offset, 0)
+    budget = ResponseBudget(max_tokens=max_tokens)
     for source in _iter_source_files(path, language=language):
         scanned_files += 1
         text = _read_text(source)
         if text is None:
             continue
+        parse_error = None
         if language == "python":
             imports, parse_error = _python_imports(text, path=source)
             if parse_error:
@@ -349,19 +438,59 @@ def code_map_imports(*, path: Path, language: str = "python", limit: int = 500) 
         else:
             imports = _js_imports(text)
 
+        if errors:
+            error_candidate = {
+                "success": True,
+                "path": str(path),
+                "language": language,
+                "imports": imports_by_file,
+                "scanned_files": scanned_files,
+                "errors": errors,
+                "next_offset": start + len(imports_by_file),
+            }
+            _rendered, error_measurement = with_budget_metadata(
+                error_candidate,
+                budget=budget,
+                truncated=True,
+                stop_reason="token_budget",
+            )
+            if not error_measurement.fits:
+                if parse_error:
+                    errors.pop()
+                truncated = True
+                break
+
         if not imports:
+            continue
+        if seen < start:
+            seen += 1
             continue
         if len(imports_by_file) >= limit:
             truncated = True
             break
-        imports_by_file.append(
-            {
-                "file": str(source),
-                "imports": imports,
-            }
+        item = {"file": str(source), "imports": imports}
+        candidate = {
+            "success": True,
+            "path": str(path),
+            "language": language,
+            "imports": [*imports_by_file, item],
+            "scanned_files": scanned_files,
+            "errors": errors,
+            "next_offset": start + len(imports_by_file) + 1,
+        }
+        _rendered, measurement = with_budget_metadata(
+            candidate,
+            budget=budget,
+            truncated=True,
+            stop_reason="token_budget",
         )
+        if not measurement.fits:
+            truncated = True
+            break
+        imports_by_file.append(item)
+        seen += 1
 
-    return {
+    payload = {
         "success": True,
         "path": str(path),
         "language": language,
@@ -369,4 +498,12 @@ def code_map_imports(*, path: Path, language: str = "python", limit: int = 500) 
         "truncated": truncated,
         "scanned_files": scanned_files,
         "errors": errors,
+        "next_offset": start + len(imports_by_file) if truncated else None,
     }
+    rendered, _measurement = with_budget_metadata(
+        payload,
+        budget=budget,
+        truncated=truncated,
+        stop_reason="token_budget" if truncated and len(imports_by_file) < limit else ("limit" if truncated else "end_of_results"),
+    )
+    return rendered

@@ -11,6 +11,7 @@ from chatgpt_web_oauth_mcp.gitops import (
     git_show,
     git_status,
 )
+from chatgpt_web_oauth_mcp.response_budget import ResponseBudget, render_json_payload
 
 
 def _init_repo(path: Path) -> None:
@@ -123,6 +124,29 @@ def test_git_diff_per_file_truncation_is_independent(tmp_path: Path) -> None:
     assert by_path["b.txt"]["truncated"] is False
     # Small file's change is still visible after large file was truncated.
     assert "small change" in by_path["b.txt"]["diff"]
+
+
+def test_git_diff_token_budget_returns_byte_continuation(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    target = tmp_path / "large.txt"
+    target.write_text("seed\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    target.write_text("seed\n" + "changed 内容\n" * 500, encoding="utf-8")
+
+    result = git_diff(cwd=tmp_path, max_tokens=500, max_bytes=1_000_000)
+    full_diff = subprocess.run(
+        ["git", "diff", "--no-color"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    ).stdout
+
+    assert ResponseBudget(max_tokens=500).count_tokens(render_json_payload(result)) <= 500
+    assert result["partial"] is True
+    assert result["stop_reason"] == "token_budget"
+    assert result["next_offset"] == len(result["diff"].encode("utf-8"))
+    assert full_diff.startswith(result["diff"].encode("utf-8"))
 
 
 def test_git_commit_amend_updates_head(tmp_path: Path) -> None:

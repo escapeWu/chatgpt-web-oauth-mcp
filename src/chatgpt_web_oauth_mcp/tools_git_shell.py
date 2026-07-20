@@ -15,7 +15,13 @@ from .gitops import git_worktree_list as git_worktree_list_impl
 from .gitops import git_worktree_remove as git_worktree_remove_impl
 from .gitops import git_worktree_status as git_worktree_status_impl
 from .pathing import resolve_cwd
-from .shell import MAX_COMMAND_BATCH_CONCURRENCY, MAX_COMMAND_TIMEOUT_SECONDS, MAX_JOB_TAIL_LINES
+from .shell import (
+    MAX_COMMAND_BATCH_CONCURRENCY,
+    MAX_COMMAND_TIMEOUT_SECONDS,
+    MAX_JOB_LIST_LIMIT,
+    MAX_JOB_OUTPUT_BYTES,
+    MAX_JOB_TAIL_LINES,
+)
 from .shell import run_command as run_command_impl
 from .shell import run_commands as run_commands_impl
 from .tool_context import LOCAL_WRITE_TOOL, OPEN_WORLD_WRITE_TOOL, READ_ONLY_TOOL, ToolContext
@@ -76,6 +82,7 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         ] = None,
         max_bytes: Annotated[int, Field(description="Maximum total diff bytes to return.")] = 65536,
         per_file_max_bytes: Annotated[int, Field(description="Maximum diff bytes to return per changed file.")] = 16384,
+        offset: Annotated[int, Field(description="Byte offset into the flat diff for lossless pagination.", ge=0)] = 0,
     ) -> dict[str, object]:
         resolved_cwd = resolve_cwd(cwd, ctx.workspace_root)
         return git_diff_impl(
@@ -84,6 +91,8 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             paths=paths,
             max_bytes=max_bytes,
             per_file_max_bytes=per_file_max_bytes,
+            offset=offset,
+            max_tokens=ctx.tool_output_token_budget,
         )
 
     @mcp.tool(
@@ -159,6 +168,7 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         ] = None,
         max_bytes: Annotated[int, Field(description="Maximum total output bytes to return.")] = 65536,
         per_file_max_bytes: Annotated[int, Field(description="Maximum diff bytes to return per file.")] = 16384,
+        offset: Annotated[int, Field(description="Byte offset into the flat commit diff.", ge=0)] = 0,
     ) -> dict[str, object]:
         resolved_cwd = resolve_cwd(cwd, ctx.workspace_root)
         return git_show_impl(
@@ -166,6 +176,8 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             ref=ref,
             max_bytes=max_bytes,
             per_file_max_bytes=per_file_max_bytes,
+            offset=offset,
+            max_tokens=ctx.tool_output_token_budget,
         )
 
     @mcp.tool(
@@ -376,12 +388,16 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
                 force=force,
                 mode=mode,
                 max_concurrency=max_concurrency,
+                max_tokens=ctx.run_token_budget,
+                capture_max_bytes=ctx.run_capture_max_bytes,
             )
         return run_command_impl(
             command=command or "",
             cwd=resolved_cwd,
             timeout=effective_timeout,
             force=force,
+            max_tokens=ctx.run_token_budget,
+            capture_max_bytes=ctx.run_capture_max_bytes,
         )
 
     @mcp.tool(
@@ -390,9 +406,9 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         annotations=OPEN_WORLD_WRITE_TOOL,
         description=(
             "Start one generic local subprocess in the background. stdout and stderr are "
-            "captured to per-job log files under the server state directory. This is only "
-            "an in-process runtime registry: no scheduling, restart, resume, dependencies, "
-            "or artifact tracking."
+            "captured to private per-job log files under the server state directory. A detached "
+            "supervisor keeps the job recoverable across MCP server restarts; this does not add "
+            "scheduling, automatic restart, dependencies, or artifact tracking."
         ),
     )
     def job_start(
@@ -420,18 +436,106 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         )
 
     @mcp.tool(
+        name="job_list",
+        title="Job List",
+        annotations=READ_ONLY_TOOL,
+        description=(
+            "Discover durable background jobs from the current server state directory without "
+            "depending on in-memory registry state. Reconciles stale nonterminal records, filters "
+            "by durable status, and returns newest-first cursor-safe offset pagination with bounded "
+            "command summaries and warnings for skipped corrupt or unsafe records."
+        ),
+    )
+    def job_list(
+        status: Annotated[
+            Literal["all", "running", "succeeded", "failed", "killed", "interrupted"],
+            Field(description="Durable job status to include, or all for every valid job record."),
+        ] = "all",
+        offset: Annotated[
+            int,
+            Field(description="Zero-based offset into the filtered newest-first job list.", ge=0),
+        ] = 0,
+        limit: Annotated[
+            int,
+            Field(
+                description=f"Maximum number of job summaries to return. Hard limit: {MAX_JOB_LIST_LIMIT}.",
+                ge=1,
+                le=MAX_JOB_LIST_LIMIT,
+            ),
+        ] = 50,
+    ) -> dict[str, object]:
+        return ctx.job_registry.list_jobs(
+            state_dir=ctx.state_dir,
+            status=status,
+            offset=offset,
+            limit=limit,
+            max_tokens=ctx.tool_output_token_budget,
+        )
+
+    @mcp.tool(
         name="job_status",
         title="Job Status",
         annotations=READ_ONLY_TOOL,
         description=(
-            "Return status for a background job started by this server process, including "
+            "Return durable status for a background job in the current server state directory, including "
             "pid, elapsed time, exit code, resource usage when available, and stdout/stderr log paths."
         ),
     )
     def job_status(
         job_id: Annotated[str, Field(description="Server-generated job_id returned by job_start.")]
     ) -> dict[str, object]:
-        return ctx.job_registry.job_status(job_id=job_id)
+        return ctx.job_registry.job_status(job_id=job_id, state_dir=ctx.state_dir)
+
+    @mcp.tool(
+        name="job_output",
+        title="Job Output",
+        annotations=READ_ONLY_TOOL,
+        description=(
+            "Read one durable job log incrementally using a per-stream raw-byte cursor. Pass the "
+            "returned next_cursor back with the same stdout or stderr stream; stdout/stderr are not "
+            "merged and no cross-stream ordering is inferred. Reads are bounded by max_bytes and the "
+            "configured o200k token budget, with optional long-polling while a job is nonterminal."
+        ),
+    )
+    def job_output(
+        job_id: Annotated[str, Field(description="Server-generated job_id returned by job_start.")],
+        stream: Annotated[
+            Literal["stdout", "stderr"],
+            Field(description="Single job log stream whose independent raw-byte cursor is being read."),
+        ] = "stdout",
+        cursor: Annotated[
+            int,
+            Field(description="Raw-byte offset in the selected stream; reuse next_cursor to continue.", ge=0),
+        ] = 0,
+        max_bytes: Annotated[
+            int,
+            Field(
+                description=f"Maximum raw log bytes to read in this page. Hard limit: {MAX_JOB_OUTPUT_BYTES}.",
+                ge=1,
+                le=MAX_JOB_OUTPUT_BYTES,
+            ),
+        ] = 65536,
+        wait_ms: Annotated[
+            int,
+            Field(
+                description=(
+                    "Long-poll window in milliseconds when cursor is caught up and the job is nonterminal. "
+                    "Returns early when bytes arrive or the job becomes terminal. Hard limit: 30000."
+                ),
+                ge=0,
+                le=30000,
+            ),
+        ] = 0,
+    ) -> dict[str, object]:
+        return ctx.job_registry.output_job(
+            job_id=job_id,
+            state_dir=ctx.state_dir,
+            stream=stream,
+            cursor=cursor,
+            max_bytes=max_bytes,
+            wait_ms=wait_ms,
+            max_tokens=ctx.job_output_token_budget,
+        )
 
     @mcp.tool(
         name="job_tail",
@@ -453,7 +557,7 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             Field(description=f"Number of log lines to return, capped at {MAX_JOB_TAIL_LINES}.", ge=1),
         ] = 50,
     ) -> dict[str, object]:
-        return ctx.job_registry.tail_job(job_id=job_id, stream=stream, lines=lines)
+        return ctx.job_registry.tail_job(job_id=job_id, state_dir=ctx.state_dir, stream=stream, lines=lines)
 
     @mcp.tool(
         name="job_kill",
@@ -472,7 +576,7 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             Field(description="Signal to send to the registered job process group."),
         ] = "TERM",
     ) -> dict[str, object]:
-        return ctx.job_registry.kill_job(job_id=job_id, signal_name=signal)
+        return ctx.job_registry.kill_job(job_id=job_id, state_dir=ctx.state_dir, signal_name=signal)
 
     @mcp.tool(
         name="delegate_task",
@@ -709,6 +813,10 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             int,
             Field(description="Maximum recent delegates to return. Hard limit: 20.", ge=1, le=20),
         ] = 10,
+        offset: Annotated[
+            int,
+            Field(description="Number of recent delegates to skip for pagination.", ge=0),
+        ] = 0,
         watch_seconds: Annotated[
             float,
             Field(
@@ -735,8 +843,10 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         return ctx.registry.delegate_status(
             delegate_id=delegate_id,
             limit=limit,
+            offset=offset,
             watch_seconds=watch_seconds,
             poll_seconds=poll_seconds,
+            max_tokens=ctx.tool_output_token_budget,
         )
 
     return {
@@ -752,7 +862,9 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         "git_worktree_remove": git_worktree_remove,
         "run_command": run_command,
         "job_start": job_start,
+        "job_list": job_list,
         "job_status": job_status,
+        "job_output": job_output,
         "job_tail": job_tail,
         "job_kill": job_kill,
         "delegate_task": delegate_task,

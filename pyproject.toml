@@ -13,6 +13,9 @@ dependencies = [
     # against pyproject.toml so stale editable metadata cannot silently drift.
     "fastmcp>=3.2.4,<4",
     "mcp>=1.27.1,<2",
+    "pillow>=10.0.0,<13",
+    "pypdf>=5.0.0,<7",
+    "tiktoken>=0.7.0,<1",
     "uvicorn>=0.30.0",
 ]
 

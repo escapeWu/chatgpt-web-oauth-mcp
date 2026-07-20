@@ -78,6 +78,30 @@ class ToolContext:
         return int(self._get("DELEGATE_TIMEOUT", 300))
 
     @property
+    def tool_output_token_budget(self) -> int:
+        return int(self._get("TOOL_OUTPUT_TOKEN_BUDGET", 8500))
+
+    @property
+    def read_token_budget(self) -> int:
+        return int(self._get("READ_TOKEN_BUDGET", self.tool_output_token_budget))
+
+    @property
+    def run_token_budget(self) -> int:
+        return int(self._get("RUN_TOKEN_BUDGET", self.tool_output_token_budget))
+
+    @property
+    def job_output_token_budget(self) -> int:
+        return int(self._get("JOB_OUTPUT_TOKEN_BUDGET", self.tool_output_token_budget))
+
+    @property
+    def run_capture_max_bytes(self) -> int:
+        return int(self._get("RUN_CAPTURE_MAX_BYTES", 1024 * 1024))
+
+    @property
+    def ripgrep_binary(self) -> str:
+        return str(self._get("RIPGREP_BINARY", "rg"))
+
+    @property
     def debug_mcp_logging(self) -> bool:
         return bool(self._get("DEBUG_MCP_LOGGING", False))
 

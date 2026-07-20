@@ -10,6 +10,12 @@ import shutil
 import subprocess
 from typing import Sequence
 
+from .response_budget import (
+    DEFAULT_TOOL_OUTPUT_TOKEN_BUDGET,
+    ResponseBudget,
+    with_budget_metadata,
+)
+
 
 FIELD_SEPARATOR = "\x1f"
 MAX_CAPTURE_LINES = 500
@@ -488,6 +494,7 @@ class TmuxClient:
         session: str,
         lines: int = 100,
         join_wrapped: bool = True,
+        max_tokens: int = DEFAULT_TOOL_OUTPUT_TOKEN_BUDGET,
     ) -> dict[str, object]:
         try:
             requested_lines = int(lines)
@@ -526,7 +533,7 @@ class TmuxClient:
                 byte_count += line_bytes
             output_lines = list(reversed(selected_reversed))
             content = "\n".join(output_lines)
-            return {
+            payload: dict[str, object] = {
                 "success": True,
                 "socket_name": self.socket_name,
                 "session": str(primary["session_name"]),
@@ -542,10 +549,43 @@ class TmuxClient:
                 "bytes_returned": len(content.encode("utf-8", errors="replace")),
                 "truncated_by_line_limit": truncated_by_line_limit,
                 "truncated_by_byte_limit": truncated_by_byte_limit,
+                "truncated_by_token_budget": False,
                 "join_wrapped": bool(join_wrapped),
                 "lines": output_lines,
                 "content": content,
+                "next_offset": None,
             }
+            budget = ResponseBudget(max_tokens=max_tokens)
+            initially_truncated = truncated_by_line_limit or truncated_by_byte_limit
+            rendered, measurement = with_budget_metadata(
+                payload,
+                budget=budget,
+                truncated=initially_truncated,
+                stop_reason=(
+                    "byte_budget" if truncated_by_byte_limit else "line_limit"
+                )
+                if initially_truncated
+                else "snapshot_complete",
+            )
+            token_truncated = False
+            while not measurement.fits and output_lines:
+                token_truncated = True
+                output_lines.pop(0)
+                content = "\n".join(output_lines)
+                payload["lines"] = output_lines
+                payload["content"] = content
+                payload["lines_returned"] = len(output_lines)
+                payload["bytes_returned"] = len(content.encode("utf-8", errors="replace"))
+                payload["truncated_by_token_budget"] = True
+                rendered, measurement = with_budget_metadata(
+                    payload,
+                    budget=budget,
+                    truncated=True,
+                    stop_reason="token_budget",
+                )
+            if token_truncated:
+                rendered["truncated_by_token_budget"] = True
+            return rendered
         except TmuxControlError as exc:
             return exc.as_payload()
 

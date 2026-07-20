@@ -7,6 +7,12 @@ import subprocess
 from fnmatch import fnmatch
 from pathlib import Path
 
+from .response_budget import (
+    DEFAULT_TOOL_OUTPUT_TOKEN_BUDGET,
+    ResponseBudget,
+    with_budget_metadata,
+)
+
 
 # Directories we almost never want to return to an agent. Used as a default
 # prune list when recursing so that a single `list_files(recursive=True)` on a
@@ -207,6 +213,11 @@ def list_files(
     include_hidden: bool = False,
     respect_gitignore: bool = True,
     exclude_patterns: list[str] | tuple[str, ...] | None = None,
+    sort: str = "path",
+    files_only: bool = False,
+    dirs_only: bool = False,
+    filter_mode: str = "project",
+    max_tokens: int = DEFAULT_TOOL_OUTPUT_TOKEN_BUDGET,
 ) -> dict[str, object]:
     """List entries under ``path``.
 
@@ -221,6 +232,18 @@ def list_files(
         return _error("path_not_found", f"Path not found: {path}", resolved_path=str(path))
     if not path.is_dir():
         return _error("not_a_directory", f"Path is not a directory: {path}", resolved_path=str(path))
+    if limit < 0 or offset < 0:
+        return _error("invalid_arguments", "limit and offset must be non-negative integers.")
+    if sort not in {"path", "modified", "size"}:
+        return _error("invalid_sort", "sort must be one of: path, modified, size.")
+    if filter_mode not in {"project", "all"}:
+        return _error("invalid_filter", "filter must be one of: project, all.")
+    if files_only and dirs_only:
+        return _error("invalid_arguments", "files_only and dirs_only cannot both be true.")
+
+    if filter_mode == "all":
+        include_hidden = True
+        respect_gitignore = False
 
     patterns: tuple[str, ...] = tuple(exclude_patterns or ())
 
@@ -237,7 +260,9 @@ def list_files(
         path,
         recursive=recursive,
         include_hidden=include_hidden,
-        exclude_dir_names=DEFAULT_EXCLUDE_DIR_NAMES,
+        exclude_dir_names=(
+            DEFAULT_EXCLUDE_DIR_NAMES if filter_mode == "project" else frozenset()
+        ),
         exclude_patterns=patterns,
         allowed=allowed,
     )
@@ -245,45 +270,97 @@ def list_files(
     # Materialize with stable ordering. We already sort at each level inside
     # _iter_filtered, but recursive walks interleave dirs/files per directory;
     # for deterministic pagination we sort the final list by string path.
-    entries_all = sorted(entries_iter, key=lambda item: str(item))
-
-    start = max(offset, 0)
-    selected = entries_all[start:]
-    entries: list[dict[str, object]] = []
-    truncated = False
-    for index, entry in enumerate(selected):
-        if limit != 0 and index >= limit:
-            truncated = True
-            break
+    entry_records: list[tuple[Path, int | None, float | None, bool]] = []
+    for entry in entries_iter:
+        is_dir = entry.is_dir()
+        if files_only and is_dir:
+            continue
+        if dirs_only and not is_dir:
+            continue
         try:
             stat_result = entry.stat()
-            size = stat_result.st_size if entry.is_file() else None
+            size = stat_result.st_size if not is_dir else None
             mtime = stat_result.st_mtime
         except OSError:
             size = None
             mtime = None
-        entries.append(
-            {
-                "name": entry.name,
-                "path": str(entry),
-                "is_dir": entry.is_dir(),
-                "size": size,
-                "mtime": mtime,
-            }
+        entry_records.append((entry, size, mtime, is_dir))
+
+    if sort == "modified":
+        entry_records.sort(
+            key=lambda item: (
+                -(item[2] if item[2] is not None else float("-inf")),
+                str(item[0]),
+            )
         )
-    return {
+    elif sort == "size":
+        entry_records.sort(
+            key=lambda item: (
+                -(item[1] if item[1] is not None else -1),
+                str(item[0]),
+            )
+        )
+    else:
+        entry_records.sort(key=lambda item: str(item[0]))
+
+    start = max(offset, 0)
+    entries: list[dict[str, object]] = []
+    truncated = False
+    budget = ResponseBudget(max_tokens=max_tokens)
+    base_payload: dict[str, object] = {
         "success": True,
         "base_path": str(path),
-        "entries": entries,
-        "truncated": truncated,
-        "next_offset": start + len(entries) if truncated else None,
+        "entries": [],
+        "next_offset": None,
+        "sort": sort,
         "filters": {
+            "filter": filter_mode,
+            "files_only": files_only,
+            "dirs_only": dirs_only,
             "include_hidden": include_hidden,
             "respect_gitignore": respect_gitignore,
             "gitignore_applied": gitignore_applied,
             "exclude_patterns": list(patterns),
         },
     }
+    for index, (entry, size, mtime, is_dir) in enumerate(entry_records[start:]):
+        if limit != 0 and index >= limit:
+            truncated = True
+            break
+        entry_payload = {
+            "name": entry.name,
+            "path": str(entry),
+            "is_dir": is_dir,
+            "size": size,
+            "mtime": mtime,
+        }
+        candidate = dict(base_payload)
+        candidate["entries"] = [*entries, entry_payload]
+        candidate["next_offset"] = start + len(entries) + 1
+        _rendered, measurement = with_budget_metadata(
+            candidate,
+            budget=budget,
+            truncated=True,
+            stop_reason="token_budget",
+        )
+        if not measurement.fits:
+            truncated = True
+            break
+        entries.append(entry_payload)
+
+    if start + len(entries) < len(entry_records):
+        truncated = True
+    base_payload["entries"] = entries
+    base_payload["next_offset"] = start + len(entries) if truncated else None
+    rendered, _measurement = with_budget_metadata(
+        base_payload,
+        budget=budget,
+        truncated=truncated,
+        stop_reason=("token_budget" if truncated and (limit == 0 or len(entries) < limit) else "limit")
+        if truncated
+        else "end_of_results",
+    )
+    return rendered
 
 
 def read_file(
@@ -294,6 +371,7 @@ def read_file(
     max_lines: int,
     max_bytes: int,
     include_line_numbers: bool = False,
+    max_tokens: int = DEFAULT_TOOL_OUTPUT_TOKEN_BUDGET,
 ) -> dict[str, object]:
     if not path.exists():
         return _error("file_not_found", f"File not found: {path}", resolved_path=str(path))
@@ -309,34 +387,81 @@ def read_file(
     start = max(offset or 1, 1)
     line_limit = max(limit or max_lines, 1)
     selected = lines[start - 1 : start - 1 + line_limit]
-    content = _render_lines(
-        selected,
-        start_line=start,
-        include_line_numbers=include_line_numbers,
-    )
-    truncated = start - 1 + line_limit < len(lines)
+    rendered_lines: list[str] = []
+    response_budget = ResponseBudget(max_tokens=max_tokens, max_bytes=max_bytes)
+    page_measurement = response_budget.measure("")
+    stop_reason: str | None = None
+    oversized_line = False
+    for index, line in enumerate(selected):
+        rendered_line = _render_lines(
+            [line],
+            start_line=start + index,
+            include_line_numbers=include_line_numbers,
+        )
+        candidate = "\n".join([*rendered_lines, rendered_line])
+        candidate_measurement = response_budget.measure(candidate)
+        if candidate_measurement.fits:
+            rendered_lines.append(rendered_line)
+            page_measurement = candidate_measurement
+            continue
+        if not rendered_lines:
+            rendered_lines.append(rendered_line)
+            page_measurement = candidate_measurement
+            oversized_line = True
+        stop_reason = candidate_measurement.stop_reason
+        break
 
-    encoded = content.encode("utf-8")
-    if len(encoded) > max_bytes:
-        content = encoded[:max_bytes].decode("utf-8", errors="ignore")
-        truncated = True
+    content = "\n".join(rendered_lines)
+    returned_count = len(rendered_lines)
+    truncated = start - 1 + returned_count < len(lines)
+    next_offset = start + returned_count if truncated and returned_count else None
+
+    if stop_reason is None:
+        stop_reason = "line_limit" if truncated else "end_of_file"
+    if oversized_line:
+        page_state = "oversized_line"
+    elif truncated:
+        page_state = "truncated"
+    else:
+        page_state = "complete"
 
     language = (mimetypes.guess_type(str(path))[0] or "").split("/")[-1] or path.suffix.lstrip(".")
     if not language:
         language = "text"
-    end_line = start + len(selected) - 1 if selected else start - 1
+    end_line = start + returned_count - 1 if returned_count else start - 1
 
     return {
         "success": True,
         "path": str(path),
         "content": content,
         "truncated": truncated,
-        "next_offset": start + len(selected) if truncated and selected else None,
+        "next_offset": next_offset,
         "offset_unit": "lines",
         "start_line": start,
         "end_line": end_line,
+        "oversized_line": oversized_line,
         "language": language,
         "include_line_numbers": include_line_numbers,
+        "page": {
+            "state": page_state,
+            "stop_reason": stop_reason,
+            "returned_line_count": returned_count,
+            "rendered_bytes": page_measurement.rendered_bytes,
+            "estimated_tokens": page_measurement.estimated_tokens,
+            "token_encoding": response_budget.encoding_name,
+            "effective_budgets": {
+                "bytes": response_budget.max_bytes,
+                "tokens": response_budget.max_tokens,
+            },
+            "budget_exceeded": {
+                "bytes": page_measurement.exceeds_byte_budget,
+                "tokens": page_measurement.exceeds_token_budget,
+            },
+            "continuation": {
+                "has_more": truncated,
+                "next_offset": next_offset,
+            },
+        },
     }
 
 
@@ -348,22 +473,110 @@ def read_files(
     max_lines: int,
     max_bytes: int,
     include_line_numbers: bool = False,
+    max_tokens: int = DEFAULT_TOOL_OUTPUT_TOKEN_BUDGET,
+    batch_offset: int = 0,
 ) -> dict[str, object]:
-    results = [
-        read_file(
+    start_index = max(batch_offset, 0)
+    selected_paths = paths[start_index:]
+    budget = ResponseBudget(max_tokens=max_tokens)
+    results: list[dict[str, object]] = []
+    stopped_by_budget = False
+
+    def candidate_payload(candidate_results: list[dict[str, object]]) -> dict[str, object]:
+        return {
+            "success": all(result.get("success") is True for result in candidate_results),
+            "mode": "batch",
+            "results": candidate_results,
+            "offset_unit": "paths",
+            "next_offset": start_index + len(candidate_results),
+        }
+
+    for path in selected_paths:
+        result = read_file(
             path,
             offset=offset,
             limit=limit,
             max_lines=max_lines,
             max_bytes=max_bytes,
             include_line_numbers=include_line_numbers,
+            max_tokens=max_tokens,
         )
-        for path in paths
-    ]
-    return {
-        "success": all(result.get("success") is True for result in results),
-        "results": results,
-    }
+        candidate_results = [*results, result]
+        candidate = candidate_payload(candidate_results)
+        _rendered, measurement = with_budget_metadata(
+            candidate,
+            budget=budget,
+            truncated=True,
+            stop_reason="token_budget",
+        )
+        if measurement.fits:
+            results.append(result)
+            continue
+
+        # Dynamically consume whatever remains of the shared budget. Short
+        # earlier files leave room for later files instead of a static split.
+        page = result.get("page")
+        while isinstance(page, dict) and int(page.get("returned_line_count", 0)) > 0:
+            returned_count = int(page["returned_line_count"]) - 1
+            lines = str(result.get("content", "")).split("\n")
+            result["content"] = "\n".join(lines[:returned_count])
+            start_line = int(result.get("start_line", 1))
+            result["end_line"] = start_line + returned_count - 1
+            result["truncated"] = True
+            result["next_offset"] = start_line + returned_count
+            result["oversized_line"] = False
+            page["state"] = "truncated"
+            page["stop_reason"] = "batch_token_budget"
+            page["returned_line_count"] = returned_count
+            content_measurement = ResponseBudget(
+                max_tokens=max_tokens,
+                max_bytes=max_bytes,
+            ).measure(str(result["content"]))
+            page["rendered_bytes"] = content_measurement.rendered_bytes
+            page["estimated_tokens"] = content_measurement.estimated_tokens
+            page["budget_exceeded"] = {
+                "bytes": content_measurement.exceeds_byte_budget,
+                "tokens": content_measurement.exceeds_token_budget,
+            }
+            continuation = page.get("continuation")
+            if isinstance(continuation, dict):
+                continuation["has_more"] = True
+                continuation["next_offset"] = result["next_offset"]
+
+            candidate_results = [*results, result]
+            candidate = candidate_payload(candidate_results)
+            _rendered, measurement = with_budget_metadata(
+                candidate,
+                budget=budget,
+                truncated=True,
+                stop_reason="token_budget",
+            )
+            if measurement.fits:
+                results.append(result)
+                break
+        stopped_by_budget = True
+        break
+
+    path_has_more = start_index + len(results) < len(paths)
+    child_partial = any(bool(result.get("truncated")) for result in results)
+    payload = candidate_payload(results)
+    payload["next_offset"] = start_index + len(results) if path_has_more else None
+    truncated = stopped_by_budget or path_has_more or child_partial
+    if stopped_by_budget:
+        stop_reason = "token_budget"
+    elif path_has_more:
+        stop_reason = "path_limit"
+    elif child_partial:
+        stop_reason = "child_partial"
+    else:
+        stop_reason = "end_of_results"
+    rendered, _measurement = with_budget_metadata(
+        payload,
+        budget=budget,
+        truncated=truncated,
+        stop_reason=stop_reason,
+    )
+    return rendered
 
 
 def write_file(path: Path, *, content: str, dry_run: bool = False) -> dict[str, object]:

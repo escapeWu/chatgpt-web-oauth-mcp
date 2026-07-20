@@ -3,6 +3,7 @@ from pathlib import Path
 
 from chatgpt_web_oauth_mcp.files import list_files, read_file, read_files, replace_in_file, write_file
 from chatgpt_web_oauth_mcp.pathing import resolve_path
+from chatgpt_web_oauth_mcp.response_budget import ResponseBudget
 
 
 def test_resolve_path_uses_workspace_root_for_relative_paths(tmp_path: Path) -> None:
@@ -163,6 +164,185 @@ def test_read_file_can_include_line_numbers(tmp_path: Path) -> None:
     assert result["content"] == "2: beta\n3: gamma"
     assert result["start_line"] == 2
     assert result["end_line"] == 3
+
+
+def test_read_file_byte_limit_paginates_without_skipping_lines(tmp_path: Path) -> None:
+    target = tmp_path / "notes.txt"
+    source_lines = ["alpha", "beta", "gamma", "delta"]
+    target.write_text("\n".join(source_lines) + "\n", encoding="utf-8")
+
+    pages = []
+    offset = 1
+    while offset is not None:
+        page = read_file(
+            target,
+            offset=offset,
+            limit=10,
+            max_lines=10,
+            max_bytes=10,
+            max_tokens=100,
+        )
+        pages.append(page)
+        offset = page["next_offset"]
+
+    assert pages[0]["content"] == "alpha\nbeta"
+    assert pages[0]["end_line"] == 2
+    assert pages[0]["next_offset"] == 3
+    assert pages[0]["page"]["stop_reason"] == "byte_budget"
+    assert pages[0]["page"]["effective_budgets"] == {"bytes": 10, "tokens": 100}
+    assert all(len(page["content"].encode("utf-8")) <= 10 for page in pages)
+    assert [line for page in pages for line in page["content"].splitlines()] == source_lines
+
+
+def test_read_file_returns_one_oversized_line_whole_and_advances(tmp_path: Path) -> None:
+    target = tmp_path / "oversized.txt"
+    oversized = "x" * 20
+    target.write_text(f"{oversized}\ntail\n", encoding="utf-8")
+
+    first = read_file(
+        target,
+        offset=1,
+        limit=10,
+        max_lines=10,
+        max_bytes=8,
+        max_tokens=100,
+    )
+    second = read_file(
+        target,
+        offset=first["next_offset"],
+        limit=10,
+        max_lines=10,
+        max_bytes=8,
+        max_tokens=100,
+    )
+
+    assert first["content"] == oversized
+    assert first["oversized_line"] is True
+    assert first["end_line"] == 1
+    assert first["next_offset"] == 2
+    assert first["page"]["state"] == "oversized_line"
+    assert first["page"]["stop_reason"] == "byte_budget"
+    assert first["page"]["budget_exceeded"] == {"bytes": True, "tokens": False}
+    assert second["content"] == "tail"
+    assert second["oversized_line"] is False
+    assert second["next_offset"] is None
+
+
+def test_read_files_share_lossless_byte_pagination_semantics(tmp_path: Path) -> None:
+    first = tmp_path / "one.txt"
+    second = tmp_path / "two.txt"
+    first.write_text("aa\nbb\ncc\n", encoding="utf-8")
+    second.write_text("11\n22\n33\n", encoding="utf-8")
+
+    result = read_files(
+        [first, second],
+        offset=1,
+        limit=3,
+        max_lines=10,
+        max_bytes=5,
+    )
+
+    assert result["success"] is True
+    assert [item["content"] for item in result["results"]] == ["aa\nbb", "11\n22"]
+    assert [item["end_line"] for item in result["results"]] == [2, 2]
+    assert [item["next_offset"] for item in result["results"]] == [3, 3]
+
+
+def test_read_file_token_limit_paginates_without_skipping_lines(tmp_path: Path) -> None:
+    target = tmp_path / "tokens.txt"
+    source_lines = ["alpha", "beta", "gamma", "delta"]
+    target.write_text("\n".join(source_lines) + "\n", encoding="utf-8")
+
+    pages = []
+    offset = 1
+    while offset is not None:
+        page = read_file(
+            target,
+            offset=offset,
+            limit=10,
+            max_lines=10,
+            max_bytes=4096,
+            max_tokens=3,
+        )
+        pages.append(page)
+        offset = page["next_offset"]
+
+    assert [page["content"] for page in pages] == ["alpha\nbeta", "gamma\ndelta"]
+    assert pages[0]["page"]["state"] == "truncated"
+    assert pages[0]["page"]["stop_reason"] == "token_budget"
+    assert pages[0]["page"]["returned_line_count"] == 2
+    assert pages[0]["page"]["estimated_tokens"] == 3
+    assert pages[0]["page"]["token_encoding"] == "o200k_base"
+    assert pages[0]["page"]["continuation"] == {"has_more": True, "next_offset": 3}
+    assert all(page["page"]["estimated_tokens"] <= 3 for page in pages)
+    assert [line for page in pages for line in page["content"].splitlines()] == source_lines
+
+
+def test_read_file_token_budget_counts_rendered_line_numbers(tmp_path: Path) -> None:
+    target = tmp_path / "numbered.txt"
+    target.write_text("alpha\nbeta\n", encoding="utf-8")
+
+    plain = read_file(
+        target,
+        offset=1,
+        limit=2,
+        max_lines=10,
+        max_bytes=4096,
+        max_tokens=3,
+    )
+    numbered = read_file(
+        target,
+        offset=1,
+        limit=2,
+        max_lines=10,
+        max_bytes=4096,
+        max_tokens=3,
+        include_line_numbers=True,
+    )
+
+    assert plain["content"] == "alpha\nbeta"
+    assert plain["page"]["estimated_tokens"] == 3
+    assert numbered["content"] == "1: alpha"
+    assert numbered["end_line"] == 1
+    assert numbered["next_offset"] == 2
+    assert numbered["page"]["estimated_tokens"] == 3
+    assert numbered["page"]["stop_reason"] == "token_budget"
+
+
+def test_read_file_returns_one_token_oversized_line_whole_and_advances(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "token-oversized.txt"
+    oversized = "hello " * 10
+    target.write_text(f"{oversized}\ntail\n", encoding="utf-8")
+
+    first = read_file(
+        target,
+        offset=1,
+        limit=10,
+        max_lines=10,
+        max_bytes=4096,
+        max_tokens=2,
+    )
+    second = read_file(
+        target,
+        offset=first["next_offset"],
+        limit=10,
+        max_lines=10,
+        max_bytes=4096,
+        max_tokens=2,
+    )
+
+    assert ResponseBudget(max_tokens=2).count_tokens(oversized) > 2
+    assert first["content"] == oversized
+    assert first["oversized_line"] is True
+    assert first["next_offset"] == 2
+    assert first["page"]["state"] == "oversized_line"
+    assert first["page"]["stop_reason"] == "token_budget"
+    assert first["page"]["budget_exceeded"] == {"bytes": False, "tokens": True}
+    assert second["content"] == "tail"
+    assert second["oversized_line"] is False
+    assert second["next_offset"] is None
 
 
 def test_write_file_creates_parent_directories(tmp_path: Path) -> None:
