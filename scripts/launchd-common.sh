@@ -55,7 +55,9 @@ pick_python() {
 }
 
 python_runtime_deps_ok() {
-  ROOT_DIR="${ROOT_DIR}" python - <<'PY' >/dev/null 2>&1
+  # Use -c instead of a here-document. Recent Homebrew Bash releases can
+  # deadlock while filling a here-document pipe before the Python reader starts.
+  ROOT_DIR="${ROOT_DIR}" python -c '
 from __future__ import annotations
 
 import sys
@@ -114,7 +116,7 @@ import fastmcp  # noqa: F401
 import chatgpt_web_oauth_mcp.launchd_support  # noqa: F401
 import chatgpt_web_oauth_mcp.supervisor  # noqa: F401
 import uvicorn  # noqa: F401
-PY
+' >/dev/null 2>&1
 }
 
 ensure_python_runtime_deps() {
