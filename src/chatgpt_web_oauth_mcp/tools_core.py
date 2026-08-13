@@ -5,6 +5,7 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from . import session
+from .delegate_guidance import DELEGATE_USE_URI, SKILL_INDEX_URI
 from .envtools import env_diff as env_diff_impl
 from .envtools import env_snapshot as env_snapshot_impl
 from .pathing import resolve_cwd, resolve_path
@@ -21,7 +22,7 @@ def register_core_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         annotations=READ_ONLY_TOOL,
         description=(
             "Return server metadata: app name, host/port, workspace root, state dir, "
-            "timeouts, auth mode, and the list of registered tools. Useful as a first "
+            "timeouts, auth mode, and registered tools/resources. Useful as a first "
             "call to confirm which bridge you are connected to and what it can do."
         ),
     )
@@ -33,6 +34,8 @@ def register_core_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             # fastmcp 2.14 requires a context arg; None works for server-side listing.
             registered = await list_tools(None)
         tools = sorted(tool.name for tool in registered)
+        registered_resources = await mcp.list_resources()
+        resource_uris = sorted(str(resource.uri) for resource in registered_resources)
         session_cwd = session.get_default_cwd()
         harnesses = (
             ctx.registry.harness_info()
@@ -115,6 +118,15 @@ def register_core_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
                 "status_recovery": "use delegate_status for delegate, group, project, or global state",
                 "status_monitor": "delegate_status long-polls lifecycle and group count changes up to 300s",
             },
+            "skill_guidance": {
+                "discovery_tool": "get_skill_index",
+                "delegate_guide_tool": "get_delegate_use",
+                "index_resource": SKILL_INDEX_URI,
+                "delegate_resource": DELEGATE_USE_URI,
+                "progressive_disclosure": True,
+            },
+            "resources": resource_uris,
+            "resource_count": len(resource_uris),
             "tools": tools,
             "tool_count": len(tools),
         }

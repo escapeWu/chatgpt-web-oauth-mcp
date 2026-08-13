@@ -55,6 +55,7 @@ from .tool_context import ToolContext
 from .tools_core import register_core_tools
 from .tools_files import register_file_tools
 from .tools_git_shell import register_git_shell_tools
+from .tools_skills import register_skill_tools
 from .tools_tmux import register_tmux_tools
 
 
@@ -108,7 +109,9 @@ MCP_INSTRUCTIONS = (
     "verified execution prompts. "
     "Use delegate_status when the browser context is stateless and needs task, group, project, or recent "
     "state; pass watch_seconds=300 for a five-minute lifecycle monitor. Use delegate_cancel to terminate "
-    "a task or exploration group. No taskboard or skill-discovery tools are exposed."
+    "a task or exploration group. Call get_skill_index to discover progressive-disclosure operating "
+    "guides, and call get_delegate_use before the first delegate tool call in a task. No taskboard "
+    "tools are exposed."
 )
 
 mcp = FastMCP(
@@ -150,6 +153,7 @@ _tool_context = ToolContext(
 
 _tool_exports: dict[str, object] = {}
 _tool_exports.update(register_core_tools(mcp, _tool_context))
+_tool_exports.update(register_skill_tools(mcp))
 _tool_exports.update(register_file_tools(mcp, _tool_context))
 _tool_exports.update(register_git_shell_tools(mcp, _tool_context))
 _tool_exports.update(register_tmux_tools(mcp, _tool_context))

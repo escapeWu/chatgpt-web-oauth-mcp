@@ -46,10 +46,12 @@ src/chatgpt_web_oauth_mcp/
 ├── tmux_ops.py    # bounded persistent tmux session wrapper
 ├── delegate_models.py # Delegate task/group/project domain models
 ├── delegate_harnesses.py # Pluggable Codex, Pi, and generic CLI harness adapters
+├── delegate_guidance.py # Authoritative progressive-disclosure delegate operating guide
 ├── delegate_project.py # Worktree-aware project identity resolution
 ├── delegate_scheduler.py # Project-scoped fair reader/writer scheduling
 ├── delegate_process.py # Harness process, logs, hard timeout, and cancellation
 ├── executors.py   # Backward-compatible delegate facade
+├── tools_skills.py # Skill-index/use tools and matching MCP resources
 └── supervisor.py  # rolling-reload supervisor for tunnels / launchd
 ```
 
@@ -58,6 +60,7 @@ src/chatgpt_web_oauth_mcp/
 | Tool | Purpose |
 |---|---|
 | `server_info` | Inspect runtime config and available MCP tools |
+| `get_skill_index` / `get_delegate_use` | Discover and load the delegate operating guide before delegate workflows |
 | `set_default_cwd` / `get_default_cwd` | Manage session default working directory |
 | `env_snapshot` / `env_diff` | Read-only runtime diagnostics and inline snapshot comparison |
 | `list_files` | Ignore-aware directory listing with sort/type filters, stable pagination, and token budgets |
@@ -78,6 +81,13 @@ src/chatgpt_web_oauth_mcp/
 | `delegate_status` | Inspect delegate/group/project/global state with lifecycle long-polling up to 300s |
 | `delegate_cancel` | Cancel one delegate or all children of one exploration group |
 
+## Guidance resources
+
+- `skill://chatgpt-web-oauth-mcp/index` is the machine-readable skill index.
+- `skill://chatgpt-web-oauth-mcp/delegate-use` is the authoritative Markdown guide.
+- The matching tools exist for clients and gateways that expose tools more reliably than MCP resources.
+- Keep guidance in `delegate_guidance.py`; do not maintain a second handwritten filesystem-skill copy.
+
 ## Key concepts
 
 - `WORKSPACE_ROOT` is a default cwd / relative-path anchor, not a sandbox boundary. Set it with `CHATGPT_MCP_WORKSPACE_ROOT`.
@@ -85,7 +95,7 @@ src/chatgpt_web_oauth_mcp/
 - `CHATGPT_MCP_PUBLIC_BASE_URL` must be set in OAuth mode so issuer and resource URLs are stable and not Host-header-derived.
 - Prefer separate `CHATGPT_MCP_AUTH_TOKEN` and `CHATGPT_MCP_OAUTH_LOGIN_TOKEN` values.
 - `tmux_*` defaults to the normal `default` tmux socket so sessions remain manually attachable. Use a separate `CHATGPT_MCP_TMUX_SOCKET_NAME` when isolation is preferred. `tmux_capture` is a terminal snapshot, not a lossless stdout/stderr log.
-- Delegate scheduling uses a harness-neutral, project-scoped fair reader/writer model. `harness=codex` retains `gpt-5.6-luna + low` / `gpt-5.6-sol + xhigh` defaults; Codex explore uses `--sandbox read-only --ephemeral`. `harness=pi` inherits Pi's configured model by default; Pi explore disables extensions, skills, project context, and sessions and restricts tools to `read,grep,find,ls`. Every explore forces `commit_mode=forbidden` and receives a defensive before/after Git status audit. Code is the single exclusive writer per project. A queued writer prevents later readers from overtaking it. Git common-dir is the project key, so linked worktrees share one writer lane. Different projects schedule independently within global resource limits. Wait windows do not kill processes; per-kind execution timeouts do, using TERM then KILL on the process group. Every delegate keeps private prompt/stdout/stderr/metadata logs. Use `delegate_status(delegate_id=...)` or `delegate_status(group_id=...)` after queued/running responses, and `delegate_cancel` for explicit termination. No TaskBoard or skill-discovery tools are exposed.
+- Delegate scheduling uses a harness-neutral, project-scoped fair reader/writer model. Load `get_delegate_use` before the first delegate call in a task. `harness=codex` retains `gpt-5.6-luna + low` / `gpt-5.6-sol + xhigh` defaults; Codex explore uses `--sandbox read-only --ephemeral`. `harness=pi` inherits Pi's configured model by default; Pi explore disables extensions, Pi-local skills, project context, and sessions and restricts tools to `read,grep,find,ls`. This does not disable MCP skill-guidance tools/resources. Every explore forces `commit_mode=forbidden` and receives a defensive before/after Git status audit. Code is the single exclusive writer per project. A queued writer prevents later readers from overtaking it. Git common-dir is the project key, so linked worktrees share one writer lane. Different projects schedule independently within global resource limits. Wait windows do not kill processes; per-kind execution timeouts do, using TERM then KILL on the process group. Every delegate keeps private prompt/stdout/stderr/metadata logs. Use `delegate_status(delegate_id=...)` or `delegate_status(group_id=...)` after queued/running responses, and `delegate_cancel` for explicit termination. No TaskBoard tools are exposed.
 
 ## Development rules
 

@@ -152,6 +152,8 @@ def test_mcp_removed_task_tools_are_not_exposed(tmp_path: Path, monkeypatch) -> 
                 names = {tool.name for tool in tools.tools}
                 assert "delegate_task" in names
                 assert "run_command" in names
+                assert "get_skill_index" in names
+                assert "get_delegate_use" in names
                 for removed in {
                     "run_command_stream",
                     "wait_task",
@@ -163,6 +165,33 @@ def test_mcp_removed_task_tools_are_not_exposed(tmp_path: Path, monkeypatch) -> 
                 }:
                     assert removed not in names
                 assert not {name for name in names if name.startswith("obsidian_")}
+
+        anyio.run(scenario)
+
+
+def test_mcp_skill_tools_and_resources_end_to_end(tmp_path: Path, monkeypatch) -> None:
+    token = "secret-token"
+    with _running_server(tmp_path, monkeypatch, auth_token=token) as url:
+
+        async def scenario() -> None:
+            async with _mcp_session(url, token=token) as session:
+                index = await _call_tool(session, "get_skill_index", {})
+                assert index["success"] is True
+                assert index["skills"][0]["guide_tool"] == "get_delegate_use"
+
+                guide_tool = await _call_tool(session, "get_delegate_use", {})
+                assert guide_tool["success"] is True
+                assert "# Delegate Use" in guide_tool["content"]
+
+                resources = await session.list_resources()
+                resource_uris = {str(resource.uri) for resource in resources.resources}
+                assert "skill://chatgpt-web-oauth-mcp/index" in resource_uris
+                assert "skill://chatgpt-web-oauth-mcp/delegate-use" in resource_uris
+
+                guide_resource = await session.read_resource(
+                    "skill://chatgpt-web-oauth-mcp/delegate-use"
+                )
+                assert "# Delegate Use" in guide_resource.contents[0].text
 
         anyio.run(scenario)
 

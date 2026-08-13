@@ -44,6 +44,18 @@ def test_server_info_reports_metadata_and_tools() -> None:
     }
     assert payload["routing_contract"]["chatgpt_web_role"] == "architect_manager_reviewer"
     assert payload["routing_contract"]["codex_delegate_role"] == "project_scoped_reader_writer_execution"
+    assert payload["skill_guidance"] == {
+        "discovery_tool": "get_skill_index",
+        "delegate_guide_tool": "get_delegate_use",
+        "index_resource": "skill://chatgpt-web-oauth-mcp/index",
+        "delegate_resource": "skill://chatgpt-web-oauth-mcp/delegate-use",
+        "progressive_disclosure": True,
+    }
+    assert payload["resources"] == [
+        "skill://chatgpt-web-oauth-mcp/delegate-use",
+        "skill://chatgpt-web-oauth-mcp/index",
+    ]
+    assert payload["resource_count"] == len(payload["resources"])
     tools = payload["tools"]
     assert isinstance(tools, list)
     assert "obsidian_proxy" not in payload
@@ -76,6 +88,8 @@ def test_server_info_reports_metadata_and_tools() -> None:
         "delegate_batch",
         "delegate_status",
         "delegate_cancel",
+        "get_skill_index",
+        "get_delegate_use",
     ]:
         assert name in tools, f"expected {name} in tools list"
     for name in [

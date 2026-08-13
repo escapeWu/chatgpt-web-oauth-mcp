@@ -81,7 +81,7 @@ A good delegation request includes:
 
 Delegates use a project-scoped fair reader/writer scheduler. In one project, multiple `kind=explore` readers may overlap, while `kind=code` writers are exclusive and FIFO; once a writer is queued, later readers cannot overtake it. Git worktrees sharing one common Git directory are treated as the same project. Different projects schedule independently, subject to configurable global safety limits.
 
-Choose `harness=codex` or `harness=pi`; omitting it uses `CHATGPT_MCP_DELEGATE_DEFAULT_HARNESS` (`codex` by default). Codex exploration uses `codex exec --sandbox read-only --ephemeral`. Pi exploration disables sessions, project trust/context, extensions, and skills, and restricts tools to `read,grep,find,ls`. Every explore also forces `commit_mode=forbidden` and performs a defensive before/after Git status audit. Pi code tasks run non-interactively with project trust enabled and the normal Pi tool set. Use `delegate_batch` for read-only fan-out/fan-in, `delegate_status` to monitor a delegate/group/project, and `delegate_cancel` to terminate a task or group.
+Choose `harness=codex` or `harness=pi`; omitting it uses `CHATGPT_MCP_DELEGATE_DEFAULT_HARNESS` (`codex` by default). Codex exploration uses `codex exec --sandbox read-only --ephemeral`. Pi exploration disables sessions, project trust/context, extensions, and Pi-local skills, and restricts tools to `read,grep,find,ls`. Every explore also forces `commit_mode=forbidden` and performs a defensive before/after Git status audit. Pi code tasks run non-interactively with project trust enabled and the normal Pi tool set. Use `delegate_batch` for read-only fan-out/fan-in, `delegate_status` to monitor a delegate/group/project, and `delegate_cancel` to terminate a task or group.
 
 Each delegate writes a private audit directory under the system temporary cache:
 
@@ -255,6 +255,8 @@ The watchdog checks service health. The doctor script applies targeted restarts 
 | Tool | Purpose |
 | --- | --- |
 | `server_info` | Inspect runtime configuration and registered MCP tools |
+| `get_skill_index` | Discover progressive-disclosure operating guides and their trigger conditions |
+| `get_delegate_use` | Load the complete delegate operating contract before using delegate tools |
 | `set_default_cwd` / `get_default_cwd` | Set or read the session-wide default working directory |
 | `env_snapshot` / `env_diff` | Collect a small read-only environment snapshot and compare two inline snapshots |
 
@@ -321,6 +323,17 @@ The watchdog checks service health. The doctor script applies targeted restarts 
 | `delegate_batch` | Fan out read-only exploration tasks through one harness and fan in at a group barrier |
 | `delegate_status` | Monitor a delegate, group, project, or active/recent registry state |
 | `delegate_cancel` | Cancel one delegate or every child in one exploration group |
+
+Before the first delegate tool call in a task, call `get_skill_index`, then `get_delegate_use`. This mirrors tool-plus-skill systems such as Figma's: tool schemas describe individual arguments, while the guide carries cross-tool workflow, safety, scheduling, monitoring, and recovery rules.
+
+The same authoritative content is also exposed through standard MCP resources:
+
+| Resource | Purpose |
+| --- | --- |
+| `skill://chatgpt-web-oauth-mcp/index` | Machine-readable guide index, triggers, and tool/resource routing |
+| `skill://chatgpt-web-oauth-mcp/delegate-use` | Complete Markdown delegate guide |
+
+Tools and resources are intentionally both exposed. Native MCP clients may use `resources/list` and `resources/read`; gateways such as Pi can call `get_skill_index` and `get_delegate_use` even when they surface resources only as tools. The guide has one source in the server package, preventing a filesystem copy from drifting. Pi explore's `--no-skills` flag disables Pi-local skill injection inside the delegated subprocess; it does not disable these MCP guidance endpoints used by the managing agent.
 
 The scheduler and process runner depend only on the `DelegateHarness` adapter protocol. Codex and Pi are built-in adapters; additional stdin-driven agents can be registered programmatically with `GenericCliHarness`, including separate code/read-only commands and model/reasoning argument templates. A custom harness must explicitly provide a read-only command before it can accept `kind=explore`; prompt wording alone never grants that capability.
 
@@ -451,7 +464,7 @@ Project rules and architecture notes are documented in [`AGENTS.md`](AGENTS.md).
 
 This repository was extracted from [`catoncat/notion-local-ops-mcp`](https://github.com/catoncat/notion-local-ops-mcp).
 
-It keeps the reusable local-operations MCP server concepts and ChatGPT-compatible OAuth layer, while removing the original product-specific workflows, screenshots, prompts, TaskBoard integration, skills, and branding.
+It keeps the reusable local-operations MCP server concepts and ChatGPT-compatible OAuth layer, while removing the original product-specific workflows, screenshots, prompts, TaskBoard integration, product skills, and branding.
 
 Major changes include:
 
