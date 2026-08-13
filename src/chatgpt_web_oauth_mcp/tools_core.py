@@ -34,6 +34,19 @@ def register_core_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             registered = await list_tools(None)
         tools = sorted(tool.name for tool in registered)
         session_cwd = session.get_default_cwd()
+        harnesses = (
+            ctx.registry.harness_info()
+            if hasattr(ctx.registry, "harness_info")
+            else {}
+        )
+        default_harness = getattr(
+            ctx.registry,
+            "default_harness",
+            ctx.delegate_default_harness,
+        )
+        default_harness_info = harnesses.get(default_harness, {})
+        default_explore = default_harness_info.get("explore", {})
+        default_code = default_harness_info.get("code", {})
         return {
             "success": True,
             "app_name": ctx.app_name,
@@ -44,20 +57,23 @@ def register_core_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             "state_dir": str(ctx.state_dir),
             "command_timeout_seconds": ctx.command_timeout,
             "delegate_timeout_seconds": ctx.delegate_timeout,
+            "delegate_wait_timeout_seconds": ctx.delegate_wait_timeout,
             "auth": ctx.current_oauth_config().normalized_auth_mode,
             "debug_mcp_logging": ctx.debug_mcp_logging,
             "codex_command": ctx.codex_command,
+            "pi_command": ctx.pi_command,
             "tmux": tmux_runtime_info(
                 binary=ctx.tmux_binary,
                 socket_name=ctx.tmux_socket_name,
             ),
             "routing_contract": {
                 "chatgpt_web_role": "architect_manager_reviewer",
-                "codex_delegate_role": "single_bounded_execution_slice",
+                "codex_delegate_role": "project_scoped_reader_writer_execution",
+                "delegate_role": "project_scoped_cli_harness_reader_writer_execution",
                 "default_flow": [
                     "ChatGPT Web inspects and reasons with direct MCP tools.",
-                    "ChatGPT Web creates a small Codex Execution Prompt when local execution needs a delegate.",
-                    "delegate_task runs exactly one serialized execution slice.",
+                    "ChatGPT Web creates a small bounded execution prompt when local execution needs a delegate.",
+                    "delegate_task submits one read-only explore reader or exclusive code writer.",
                     "ChatGPT Web reviews the result, logs, and local verification evidence before deciding the next step.",
                 ],
                 "delegate_task_should_not": [
@@ -67,16 +83,37 @@ def register_core_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
                 ],
             },
             "delegate_mode": {
-                "executor": "codex",
-                "serial": True,
-                "background_tasks": False,
-                "default_wait_seconds": 300,
-                "continuation": "call delegate_task again when status is running",
-                "audit_logs": "system temp / chatgpt-web-oauth-mcp / codex-delegates",
+                "executor": default_harness,
+                "default_harness": default_harness,
+                "harnesses": harnesses,
+                "scheduler": "project_scoped_fair_reader_writer",
+                "serial": False,
+                "background_tasks": True,
+                "default_wait_seconds": ctx.delegate_wait_timeout,
+                "explore": {
+                    "lane": "reader",
+                    "model": default_explore.get("model", "default"),
+                    "reasoning_effort": default_explore.get("reasoning_effort", "default"),
+                    "sandbox_mode": default_explore.get("sandbox_mode", "adapter-defined"),
+                    "execution_timeout_seconds": getattr(
+                        ctx.registry, "explore_execution_timeout_seconds", 900
+                    ),
+                },
+                "code": {
+                    "lane": "writer",
+                    "model": default_code.get("model", "default"),
+                    "reasoning_effort": default_code.get("reasoning_effort", "default"),
+                    "sandbox_mode": default_code.get("sandbox_mode", "adapter-defined"),
+                    "execution_timeout_seconds": getattr(
+                        ctx.registry, "code_execution_timeout_seconds", 3600
+                    ),
+                },
+                "continuation": "use delegate_status with delegate_id or group_id",
+                "audit_logs": "system temp / chatgpt-web-oauth-mcp / <harness>-delegates",
                 "log_progress": "use read_text on returned stdout/stderr/metadata paths",
                 "raw_output": "stdout/stderr are stored in logs and not inlined in completed responses",
-                "status_recovery": "use delegate_status to list active/recent server-generated delegate_id values",
-                "status_monitor": "delegate_status supports watch_seconds up to 300 and polls every 5s by default",
+                "status_recovery": "use delegate_status for delegate, group, project, or global state",
+                "status_monitor": "delegate_status long-polls lifecycle and group count changes up to 300s",
             },
             "tools": tools,
             "tool_count": len(tools),

@@ -1934,8 +1934,8 @@ def _timeout_limit_error(timeout: int) -> dict[str, object]:
             "code": "timeout_exceeds_limit",
             "message": (
                 f"run_command timeout is limited to {MAX_COMMAND_TIMEOUT_SECONDS}s. "
-                "Complex or long-running tasks should be delegated with delegate_task so Codex can "
-                "run them with local audit logs. If run_command is still required, set force=true "
+                "Complex or long-running tasks should be delegated with delegate_task so a configured "
+                "CLI harness can run them with local audit logs. If run_command is still required, set force=true "
                 "only after explicit user approval."
             ),
             "requested_timeout_seconds": timeout,
@@ -2110,7 +2110,7 @@ def run_command(
                 "message": (
                     f"Command exceeded the {timeout}s timeout. "
                     "Retry with a larger `timeout` argument, or use "
-                    "`delegate_task` for a serialized Codex handoff."
+                    "`delegate_task` for a project-scoped CLI-agent handoff."
                 ),
             },
             "hint": "increase_timeout_or_delegate",

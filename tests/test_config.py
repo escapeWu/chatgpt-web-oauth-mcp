@@ -56,6 +56,87 @@ def test_tool_token_budgets_can_inherit_or_override_global(
     _restore_config_after_env_test()
 
 
+def test_delegate_scheduler_defaults_and_wait_compatibility(monkeypatch: pytest.MonkeyPatch) -> None:
+    with monkeypatch.context() as patch:
+        for name in [
+            "CHATGPT_MCP_DELEGATE_TIMEOUT",
+            "CHATGPT_MCP_DELEGATE_WAIT_TIMEOUT",
+            "CHATGPT_MCP_DELEGATE_EXPLORE_EXECUTION_TIMEOUT",
+            "CHATGPT_MCP_DELEGATE_CODE_EXECUTION_TIMEOUT",
+            "CHATGPT_MCP_DELEGATE_EXPLORE_MAX_PER_PROJECT",
+            "CHATGPT_MCP_DELEGATE_EXPLORE_MAX_GLOBAL",
+            "CHATGPT_MCP_DELEGATE_CODE_MAX_PER_PROJECT",
+            "CHATGPT_MCP_DELEGATE_CODE_MAX_GLOBAL",
+            "CHATGPT_MCP_DELEGATE_QUEUE_LIMIT_PER_PROJECT",
+            "CHATGPT_MCP_DELEGATE_QUEUE_LIMIT_GLOBAL",
+        ]:
+            patch.delenv(name, raising=False)
+        importlib.reload(config)
+
+        assert config.DELEGATE_DEFAULT_HARNESS == "codex"
+        assert config.CODEX_COMMAND == "codex"
+        assert config.PI_COMMAND == "pi"
+        assert config.DELEGATE_WAIT_TIMEOUT == 300
+        assert config.DELEGATE_EXPLORE_EXECUTION_TIMEOUT == 900
+        assert config.DELEGATE_CODE_EXECUTION_TIMEOUT == 3600
+        assert config.DELEGATE_EXPLORE_MAX_PER_PROJECT == 4
+        assert config.DELEGATE_EXPLORE_MAX_GLOBAL == 8
+        assert config.DELEGATE_CODE_MAX_PER_PROJECT == 1
+        assert config.DELEGATE_CODE_MAX_GLOBAL == 4
+        assert config.DELEGATE_QUEUE_LIMIT_PER_PROJECT == 32
+        assert config.DELEGATE_QUEUE_LIMIT_GLOBAL == 128
+
+        patch.setenv("CHATGPT_MCP_DELEGATE_TIMEOUT", "45")
+        patch.delenv("CHATGPT_MCP_DELEGATE_WAIT_TIMEOUT", raising=False)
+        importlib.reload(config)
+        assert config.DELEGATE_WAIT_TIMEOUT == 45
+
+    _restore_config_after_env_test()
+
+
+def test_delegate_harness_commands_and_default_can_be_overridden(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with monkeypatch.context() as patch:
+        patch.setenv("CHATGPT_MCP_CODEX_COMMAND", "/opt/agents/codex")
+        patch.setenv("CHATGPT_MCP_PI_COMMAND", "/opt/agents/pi")
+        patch.setenv("CHATGPT_MCP_DELEGATE_DEFAULT_HARNESS", " PI ")
+        importlib.reload(config)
+
+        assert config.CODEX_COMMAND == "/opt/agents/codex"
+        assert config.PI_COMMAND == "/opt/agents/pi"
+        assert config.DELEGATE_DEFAULT_HARNESS == "pi"
+
+    _restore_config_after_env_test()
+
+
+@pytest.mark.parametrize(
+    "variable",
+    [
+        "CHATGPT_MCP_DELEGATE_TIMEOUT",
+        "CHATGPT_MCP_DELEGATE_WAIT_TIMEOUT",
+        "CHATGPT_MCP_DELEGATE_EXPLORE_EXECUTION_TIMEOUT",
+        "CHATGPT_MCP_DELEGATE_CODE_EXECUTION_TIMEOUT",
+        "CHATGPT_MCP_DELEGATE_EXPLORE_MAX_PER_PROJECT",
+        "CHATGPT_MCP_DELEGATE_EXPLORE_MAX_GLOBAL",
+        "CHATGPT_MCP_DELEGATE_CODE_MAX_PER_PROJECT",
+        "CHATGPT_MCP_DELEGATE_CODE_MAX_GLOBAL",
+        "CHATGPT_MCP_DELEGATE_QUEUE_LIMIT_PER_PROJECT",
+        "CHATGPT_MCP_DELEGATE_QUEUE_LIMIT_GLOBAL",
+    ],
+)
+def test_delegate_positive_integer_settings_reject_zero(
+    monkeypatch: pytest.MonkeyPatch,
+    variable: str,
+) -> None:
+    with monkeypatch.context() as patch:
+        patch.setenv(variable, "0")
+        with pytest.raises(ValueError, match=rf"{variable} must be a positive integer"):
+            importlib.reload(config)
+
+    _restore_config_after_env_test()
+
+
 @pytest.mark.parametrize(
     ("variable", "value"),
     [

@@ -159,7 +159,7 @@ def test_completed_delegate_does_not_hijack_new_task(tmp_path: Path) -> None:
     assert Path(second["logs"]["stdout"]).read_text(encoding="utf-8").strip() == "second"
 
 
-def test_running_delegate_rejects_different_new_task_without_starting_it(tmp_path: Path) -> None:
+def test_running_code_delegate_queues_different_task_in_same_project(tmp_path: Path) -> None:
     registry = ExecutorRegistry(
         codex_command="python3 -c \"import time; time.sleep(0.3); print('first')\""
     )
@@ -180,12 +180,18 @@ def test_running_delegate_rejects_different_new_task_without_starting_it(tmp_pat
     )
 
     assert first["status"] == "running"
-    assert second["status"] == "running"
-    assert second["delegate_id"] == first["delegate_id"]
-    assert second["task_id"] == "N04"
-    assert second["requested_task_id"] == "N05"
-    assert second["new_task_started"] is False
-    assert second["request_conflict"] is True
+    assert second["status"] == "queued"
+    assert second["delegate_id"] != first["delegate_id"]
+    assert second["task_id"] == "N05"
+    assert second["kind"] == "code"
+    assert second["lane"] == "writer"
+    assert registry.delegate_status(delegate_id=second["delegate_id"])["delegate"]["status"] == "queued"
+
+    assert registry.delegate_status(
+        delegate_id=second["delegate_id"],
+        watch_seconds=2,
+        poll_seconds=0.05,
+    )["delegate"]["status"] in {"running", "succeeded"}
 
 
 def test_delegate_status_lists_active_and_recent_delegates(tmp_path: Path) -> None:
@@ -408,29 +414,20 @@ def test_run_codex_invalid_reasoning_effort_returns_structured_failure(tmp_path:
     assert "stderr" not in result
 
 
-def test_run_codex_soft_timeout_returns_running_without_killing_process(tmp_path: Path) -> None:
+def test_run_codex_execution_timeout_kills_process(tmp_path: Path) -> None:
     registry = ExecutorRegistry(
         codex_command="python3 -c \"import time; time.sleep(2)\""
     )
 
     result = registry.run_codex(task="finish", cwd=tmp_path, timeout=1)
 
-    assert result["success"] is True
-    assert result["status"] == "running"
-    assert result["completed"] is False
-    assert result["timed_out"] is False
-    assert result["soft_timeout_elapsed"] is True
+    assert result["success"] is False
+    assert result["status"] == "timed_out"
+    assert result["completed"] is True
+    assert result["timed_out"] is True
+    assert result["error"]["code"] == "timed_out"
     assert "stdout" in result["logs"]
     assert result["log_read_hint"]["tool"] == "read_text"
-
-    time.sleep(1.2)
-    completed = registry.run_codex(task=None, cwd=tmp_path, timeout=1, wait_seconds=5)
-
-    assert completed["success"] is True
-    assert completed["status"] == "succeeded"
-    assert completed["timed_out"] is False
-    assert completed["soft_timeout_elapsed"] is True
-    assert completed["delegate_id"] == result["delegate_id"]
 
 
 def test_run_codex_extracts_structured_json_output(tmp_path: Path) -> None:

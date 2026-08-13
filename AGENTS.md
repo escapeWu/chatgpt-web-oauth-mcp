@@ -11,14 +11,14 @@ ChatGPT Web ──OAuth + HTTPS──▶ FastMCP Server (uvicorn)
                                   │
                   ┌───────────────┼───────────────┐
                   ▼               ▼               ▼
-            Direct Tools     Shell Tool     Codex Delegate
-           (inspect/edit)   (short local)  (one bounded execution slice)
+            Direct Tools     Shell Tool     CLI Harness Delegate
+           (inspect/edit)   (short local)  (project-scoped readers/writer)
 ```
 
 ChatGPT Web is the architect/manager/reviewer. It should inspect, plan, and
-review through direct MCP tools first. `delegate_task` is only a single-task
-Codex executor for a bounded Codex Execution Prompt, not a broad opaque planning
-or research loop.
+review through direct MCP tools first. `delegate_task` submits one bounded
+read-only exploration reader or coding writer; `delegate_batch` fans out only
+read-only exploration. Neither is a broad opaque planning or research loop.
 
 ## Source layout
 
@@ -28,7 +28,7 @@ src/chatgpt_web_oauth_mcp/
 ├── tool_context.py # Shared runtime lookup context and MCP tool annotations
 ├── tools_core.py  # server_info, cwd, and env_snapshot/env_diff tools
 ├── tools_files.py # list_files, search, read_text, code_map_*, write_file, apply_patch registration
-├── tools_git_shell.py # git_*, synchronous shell, serial Codex delegate registration
+├── tools_git_shell.py # git_*, synchronous shell, and delegate tool registration
 ├── tools_tmux.py # tmux list/start/status/capture/send/kill MCP registration
 ├── config.py      # Env-var driven settings
 ├── oauth.py       # OAuth dynamic registration, PKCE, token store, metadata
@@ -44,7 +44,12 @@ src/chatgpt_web_oauth_mcp/
 ├── search.py      # glob/regex/text search implementations
 ├── shell.py       # run_command subprocess helper
 ├── tmux_ops.py    # bounded persistent tmux session wrapper
-├── executors.py   # synchronous serialized delegate_task via Codex
+├── delegate_models.py # Delegate task/group/project domain models
+├── delegate_harnesses.py # Pluggable Codex, Pi, and generic CLI harness adapters
+├── delegate_project.py # Worktree-aware project identity resolution
+├── delegate_scheduler.py # Project-scoped fair reader/writer scheduling
+├── delegate_process.py # Harness process, logs, hard timeout, and cancellation
+├── executors.py   # Backward-compatible delegate facade
 └── supervisor.py  # rolling-reload supervisor for tunnels / launchd
 ```
 
@@ -68,8 +73,10 @@ src/chatgpt_web_oauth_mcp/
 | `run_command` | Execute one shell command, or multiple commands with `mode="sequential"` or `mode="parallel"`; timeout is capped at 300s unless `force=true` is used after explicit user approval; parallel batches cap `max_concurrency` at 3 |
 | `job_start` / `job_list` / `job_status` / `job_output` / `job_tail` / `job_kill` | Durable generic background jobs with disk-registry discovery, per-stream byte-cursor output, and backward-compatible last-N-lines tailing; no scheduler, restart, dependencies, or artifact tracking |
 | `tmux_list` / `tmux_start` / `tmux_status` / `tmux_capture` / `tmux_send` / `tmux_kill` | Tiny persistent interactive TTY lifecycle; one primary-pane workflow, bounded capture, stdin-buffer text paste, and no attach or server-wide kill tool |
-| `delegate_task` | Run one serialized, bounded Codex execution slice; wait up to 300s by default, then return either the result or `status=running` with readable log paths while Codex continues |
-| `delegate_status` | Read-only active/recent delegate status list with server-generated `delegate_id` values and log paths; supports `watch_seconds` long-polling up to 300s |
+| `delegate_task` | Submit one read-only explore reader or exclusive code writer in a project lane |
+| `delegate_batch` | Fan out read-only explores and fan in only after all group children terminate |
+| `delegate_status` | Inspect delegate/group/project/global state with lifecycle long-polling up to 300s |
+| `delegate_cancel` | Cancel one delegate or all children of one exploration group |
 
 ## Key concepts
 
@@ -78,7 +85,7 @@ src/chatgpt_web_oauth_mcp/
 - `CHATGPT_MCP_PUBLIC_BASE_URL` must be set in OAuth mode so issuer and resource URLs are stable and not Host-header-derived.
 - Prefer separate `CHATGPT_MCP_AUTH_TOKEN` and `CHATGPT_MCP_OAUTH_LOGIN_TOKEN` values.
 - `tmux_*` defaults to the normal `default` tmux socket so sessions remain manually attachable. Use a separate `CHATGPT_MCP_TMUX_SOCKET_NAME` when isolation is preferred. `tmux_capture` is a terminal snapshot, not a lossless stdout/stderr log.
-- `delegate_task` is intentionally Codex-only and single-flight. It should receive one small execution prompt with `files_in_scope`, `out_of_scope`, `acceptance_criteria`, `done_means`, and verification commands when possible. A caller-provided `task_id` is optional; the server always returns a generated `delegate_id`, and stateless clients can call `delegate_status` to recover active/recent delegate ids. It long-polls the active delegate for up to 300 seconds by default; if Codex is still running, it returns `status=running` and the client should call `delegate_task` again to continue waiting. `delegate_status` can also long-poll with `watch_seconds=300` and returns early only when task status changes. Each delegate writes private audit logs under the system temporary cache directory (`prompt.txt`, `stdout.log`, `stderr.log`, `metadata.json`) and returns their paths in `logs`; callers can use `read_text` on those paths to inspect live progress. Completed delegate responses do not inline raw stdout/stderr; read the returned logs for raw output. No TaskBoard, Claude delegate, or skill-discovery tools are exposed.
+- Delegate scheduling uses a harness-neutral, project-scoped fair reader/writer model. `harness=codex` retains `gpt-5.6-luna + low` / `gpt-5.6-sol + xhigh` defaults; Codex explore uses `--sandbox read-only --ephemeral`. `harness=pi` inherits Pi's configured model by default; Pi explore disables extensions, skills, project context, and sessions and restricts tools to `read,grep,find,ls`. Every explore forces `commit_mode=forbidden` and receives a defensive before/after Git status audit. Code is the single exclusive writer per project. A queued writer prevents later readers from overtaking it. Git common-dir is the project key, so linked worktrees share one writer lane. Different projects schedule independently within global resource limits. Wait windows do not kill processes; per-kind execution timeouts do, using TERM then KILL on the process group. Every delegate keeps private prompt/stdout/stderr/metadata logs. Use `delegate_status(delegate_id=...)` or `delegate_status(group_id=...)` after queued/running responses, and `delegate_cancel` for explicit termination. No TaskBoard or skill-discovery tools are exposed.
 
 ## Development rules
 

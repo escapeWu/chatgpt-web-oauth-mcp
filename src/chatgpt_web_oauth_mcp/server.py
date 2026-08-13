@@ -14,7 +14,18 @@ from .config import (
     CODEX_COMMAND,
     COMMAND_TIMEOUT,
     DEBUG_MCP_LOGGING,
+    DELEGATE_CANCEL_GRACE_SECONDS,
+    DELEGATE_DEFAULT_HARNESS,
+    DELEGATE_CODE_EXECUTION_TIMEOUT,
+    DELEGATE_CODE_MAX_GLOBAL,
+    DELEGATE_CODE_MAX_PER_PROJECT,
+    DELEGATE_EXPLORE_EXECUTION_TIMEOUT,
+    DELEGATE_EXPLORE_MAX_GLOBAL,
+    DELEGATE_EXPLORE_MAX_PER_PROJECT,
+    DELEGATE_QUEUE_LIMIT_GLOBAL,
+    DELEGATE_QUEUE_LIMIT_PER_PROJECT,
     DELEGATE_TIMEOUT,
+    DELEGATE_WAIT_TIMEOUT,
     GRACEFUL_SHUTDOWN_SECONDS,
     HOST,
     JOB_OUTPUT_TOKEN_BUDGET,
@@ -22,6 +33,7 @@ from .config import (
     OAUTH_SCOPES,
     OAUTH_TOKEN_TTL_SECONDS,
     PORT,
+    PI_COMMAND,
     PUBLIC_BASE_URL,
     READ_TOKEN_BUDGET,
     RIPGREP_BINARY,
@@ -50,12 +62,25 @@ from .tools_tmux import register_tmux_tools
 # so unauthenticated clients can't even open an SSE session. The FastMCP
 # protocol-layer middleware was redundant and has been removed.
 
-registry = ExecutorRegistry(codex_command=CODEX_COMMAND)
+registry = ExecutorRegistry(
+    codex_command=CODEX_COMMAND,
+    pi_command=PI_COMMAND,
+    default_harness=DELEGATE_DEFAULT_HARNESS,
+    max_explore_per_project=DELEGATE_EXPLORE_MAX_PER_PROJECT,
+    max_explore_global=DELEGATE_EXPLORE_MAX_GLOBAL,
+    max_code_per_project=DELEGATE_CODE_MAX_PER_PROJECT,
+    max_code_global=DELEGATE_CODE_MAX_GLOBAL,
+    queue_limit_per_project=DELEGATE_QUEUE_LIMIT_PER_PROJECT,
+    queue_limit_global=DELEGATE_QUEUE_LIMIT_GLOBAL,
+    explore_execution_timeout_seconds=DELEGATE_EXPLORE_EXECUTION_TIMEOUT,
+    code_execution_timeout_seconds=DELEGATE_CODE_EXECUTION_TIMEOUT,
+    cancel_grace_seconds=DELEGATE_CANCEL_GRACE_SECONDS,
+)
 job_registry = JobRegistry()
 
 MCP_INSTRUCTIONS = (
     "Architecture: ChatGPT Web is the architect/manager/reviewer; this local MCP server exposes "
-    "scoped local tools; delegate_task is only a single-task Codex executor. Use direct tools first "
+    "scoped local tools; delegate_task submits project-scoped CLI-harness readers or writers. Use direct tools first "
     "for repo inspection, planning, patching, short commands, git checks, and verification. "
     "Use search/read_text for focused or batched discovery and reading, apply_patch/write_file for edits, "
     "env_snapshot/env_diff for read-only runtime diagnostics. Before edits or reviews, use "
@@ -70,17 +95,20 @@ MCP_INSTRUCTIONS = (
     "persistent interactive TTY sessions, "
     "and git_* only inside a git repository. Use tmux_list/status/capture to observe a session and "
     "tmux_send for bounded text or key input; tmux capture output is a terminal snapshot, not a lossless log. "
-    "Use delegate_task only for one bounded Codex Execution Prompt when direct tools are insufficient; "
-    "it runs one serialized Codex delegate and blocks up to 300 seconds by default. If it returns "
-    "status=running, call delegate_task again to continue waiting and use read_text on returned "
+    "Use delegate_task only for one bounded CLI-agent execution prompt when direct tools are insufficient. "
+    "Use harness=codex or harness=pi, or omit harness to use the configured server default. "
+    "kind=explore is a hard read-only reader; kind=code is the project's exclusive writer. Readers "
+    "may overlap within configured limits, writers are FIFO, and separate projects schedule independently. "
+    "Use delegate_batch for read-only fan-out/fan-in. If submission returns queued/running, use "
+    "delegate_status with delegate_id or group_id and read_text on returned "
     "stdout/stderr/metadata log paths for live progress. Each delegate writes private "
     "audit logs under the system temporary cache directory and returns their paths in logs. Completed "
     "delegate responses do not inline raw stdout/stderr; use read_text on logs for output. Do not "
     "use delegate_task as a large opaque planning/research loop; split broad work into small "
     "verified execution prompts. "
-    "Use delegate_status when the browser context is stateless and needs the active or recent "
-    "server-generated delegate_id values; pass watch_seconds=300 for a five-minute status-change "
-    "monitor. No taskboard or skill-discovery tools are exposed."
+    "Use delegate_status when the browser context is stateless and needs task, group, project, or recent "
+    "state; pass watch_seconds=300 for a five-minute lifecycle monitor. Use delegate_cancel to terminate "
+    "a task or exploration group. No taskboard or skill-discovery tools are exposed."
 )
 
 mcp = FastMCP(
