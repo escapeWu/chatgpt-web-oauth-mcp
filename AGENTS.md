@@ -60,7 +60,7 @@ src/chatgpt_web_oauth_mcp/
 | Tool | Purpose |
 |---|---|
 | `server_info` | Inspect runtime config and available MCP tools |
-| `get_skill_index` / `get_delegate_use` | Discover and load the delegate operating guide before delegate workflows |
+| `get_skill_index` / `get_*_use` | Discover and load file, process, Git, or delegate operating guides before matching workflows |
 | `set_default_cwd` / `get_default_cwd` | Manage session default working directory |
 | `env_snapshot` / `env_diff` | Read-only runtime diagnostics and inline snapshot comparison |
 | `list_files` | Ignore-aware directory listing with sort/type filters, stable pagination, and token budgets |
@@ -85,6 +85,9 @@ src/chatgpt_web_oauth_mcp/
 
 - `skill://chatgpt-web-oauth-mcp/index` is the machine-readable skill index.
 - `skill://chatgpt-web-oauth-mcp/delegate-use` is the authoritative Markdown guide.
+- `skill://chatgpt-web-oauth-mcp/file-use` covers discovery, reading, code maps, and safe file mutation.
+- `skill://chatgpt-web-oauth-mcp/process-use` covers synchronous commands, durable jobs, and tmux sessions.
+- `skill://chatgpt-web-oauth-mcp/git-use` covers repository inspection, commits, history, and worktrees.
 - The matching tools exist for clients and gateways that expose tools more reliably than MCP resources.
 - Keep guidance in `delegate_guidance.py`; do not maintain a second handwritten filesystem-skill copy.
 

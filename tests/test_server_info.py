@@ -49,11 +49,26 @@ def test_server_info_reports_metadata_and_tools() -> None:
         "delegate_guide_tool": "get_delegate_use",
         "index_resource": "skill://chatgpt-web-oauth-mcp/index",
         "delegate_resource": "skill://chatgpt-web-oauth-mcp/delegate-use",
+        "guide_tools": {
+            "delegate-use": "get_delegate_use",
+            "file-use": "get_file_use",
+            "process-use": "get_process_use",
+            "git-use": "get_git_use",
+        },
+        "guide_resources": {
+            "delegate-use": "skill://chatgpt-web-oauth-mcp/delegate-use",
+            "file-use": "skill://chatgpt-web-oauth-mcp/file-use",
+            "process-use": "skill://chatgpt-web-oauth-mcp/process-use",
+            "git-use": "skill://chatgpt-web-oauth-mcp/git-use",
+        },
         "progressive_disclosure": True,
     }
     assert payload["resources"] == [
         "skill://chatgpt-web-oauth-mcp/delegate-use",
+        "skill://chatgpt-web-oauth-mcp/file-use",
+        "skill://chatgpt-web-oauth-mcp/git-use",
         "skill://chatgpt-web-oauth-mcp/index",
+        "skill://chatgpt-web-oauth-mcp/process-use",
     ]
     assert payload["resource_count"] == len(payload["resources"])
     tools = payload["tools"]
@@ -90,6 +105,9 @@ def test_server_info_reports_metadata_and_tools() -> None:
         "delegate_cancel",
         "get_skill_index",
         "get_delegate_use",
+        "get_file_use",
+        "get_process_use",
+        "get_git_use",
     ]:
         assert name in tools, f"expected {name} in tools list"
     for name in [

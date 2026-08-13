@@ -257,6 +257,9 @@ watchdog 负责检查服务健康状态。doctor 脚本会按照失败阈值和�
 | `server_info` | 检查运行时配置和已注册 MCP tools |
 | `get_skill_index` | 发现 progressive-disclosure 操作指南及其触发条件 |
 | `get_delegate_use` | 在使用 delegate tools 前加载完整委派操作契约 |
+| `get_file_use` | 加载文件发现、读取、code-map、编辑、编码、分页与 CAS 契约 |
+| `get_process_use` | 加载 command/job/tmux 的选择与生命周期契约 |
+| `get_git_use` | 加载 repository、commit、history 与 worktree 安全契约 |
 | `set_default_cwd` / `get_default_cwd` | 设置或读取 session 级默认工作目录 |
 | `env_snapshot` / `env_diff` | 收集小型只读环境快照，并比较两个 inline snapshot |
 
@@ -324,7 +327,7 @@ watchdog 负责检查服务健康状态。doctor 脚本会按照失败阈值和�
 | `delegate_status` | 监控 delegate、group、project 或全局近期状态 |
 | `delegate_cancel` | 取消一个 delegate 或一个探索 group 的全部 children |
 
-每个任务第一次调用 delegate tool 前，先调用 `get_skill_index`，再调用 `get_delegate_use`。这与 Figma 的“工具 + skill”机制一致：单个 tool schema 描述参数，guide 则承载跨工具工作流、安全、调度、监控和错误恢复规则。
+先调用 `get_skill_index` 发现指南，然后在某个工具族的第一次工作流前加载对应指南：`get_file_use`、`get_process_use`、`get_git_use` 或 `get_delegate_use`。这与 Figma 的“工具 + skill”机制一致：单个 tool schema 描述参数，guide 则承载跨工具工作流、安全、生命周期、监控和错误恢复规则。
 
 同一份权威内容也通过标准 MCP resources 暴露：
 
@@ -332,8 +335,11 @@ watchdog 负责检查服务健康状态。doctor 脚本会按照失败阈值和�
 | --- | --- |
 | `skill://chatgpt-web-oauth-mcp/index` | 机器可读的 guide 索引、触发条件和 tool/resource 路由 |
 | `skill://chatgpt-web-oauth-mcp/delegate-use` | 完整 Markdown 委派指南 |
+| `skill://chatgpt-web-oauth-mcp/file-use` | 完整 Markdown 文件工作流指南 |
+| `skill://chatgpt-web-oauth-mcp/process-use` | 完整 Markdown command、job 与 tmux 指南 |
+| `skill://chatgpt-web-oauth-mcp/git-use` | 完整 Markdown Git 与 worktree 指南 |
 
-同时暴露 tools 与 resources 是有意设计：原生 MCP client 可以使用 `resources/list`、`resources/read`；Pi 等 gateway 即使只稳定呈现 tools，也能调用 `get_skill_index` 和 `get_delegate_use`。指南在 server package 中只有一个来源，避免 filesystem 副本漂移。Pi explore 的 `--no-skills` 仅关闭被委派子进程内的 Pi 本地 skill 注入，不会关闭管理 Agent 使用的这些 MCP guidance endpoints。
+同时暴露 tools 与 resources 是有意设计：原生 MCP client 可以使用 `resources/list`、`resources/read`；Pi 等 gateway 即使只稳定呈现 tools，也能调用 `get_skill_index` 和对应的 `get_*_use`。每份指南在 server package 中只有一个来源，避免 filesystem 副本漂移。Pi explore 的 `--no-skills` 仅关闭被委派子进程内的 Pi 本地 skill 注入，不会关闭管理 Agent 使用的这些 MCP guidance endpoints。
 
 调度器和进程运行器只依赖 `DelegateHarness` adapter 协议。Codex 与 Pi 是内置 adapter；其他从 stdin 接收 prompt 的 agent 可以通过 `GenericCliHarness` 以编程方式注册，并分别配置 code/read-only 命令以及 model/reasoning 参数模板。自定义 harness 必须显式提供 read-only 命令后才能接受 `kind=explore`；仅靠 prompt 中的只读声明不会获得该能力。
 

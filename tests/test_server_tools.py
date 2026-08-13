@@ -765,6 +765,9 @@ def test_server_tools_expose_chatgpt_compatible_annotations() -> None:
     assert annotations["delegate_cancel"]["openWorldHint"] is True
     assert annotations["get_skill_index"]["readOnlyHint"] is True
     assert annotations["get_delegate_use"]["readOnlyHint"] is True
+    assert annotations["get_file_use"]["readOnlyHint"] is True
+    assert annotations["get_process_use"]["readOnlyHint"] is True
+    assert annotations["get_git_use"]["readOnlyHint"] is True
     for removed in [
         "run_command_stream",
         "get_task",

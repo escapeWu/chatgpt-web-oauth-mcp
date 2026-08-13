@@ -110,8 +110,8 @@ MCP_INSTRUCTIONS = (
     "Use delegate_status when the browser context is stateless and needs task, group, project, or recent "
     "state; pass watch_seconds=300 for a five-minute lifecycle monitor. Use delegate_cancel to terminate "
     "a task or exploration group. Call get_skill_index to discover progressive-disclosure operating "
-    "guides, and call get_delegate_use before the first delegate tool call in a task. No taskboard "
-    "tools are exposed."
+    "guides, then load the matching get_delegate_use, get_file_use, get_process_use, or get_git_use "
+    "guide before the first workflow in that tool family. No taskboard tools are exposed."
 )
 
 mcp = FastMCP(

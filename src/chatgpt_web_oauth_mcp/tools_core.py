@@ -5,7 +5,13 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from . import session
-from .delegate_guidance import DELEGATE_USE_URI, SKILL_INDEX_URI
+from .delegate_guidance import (
+    DELEGATE_USE_URI,
+    FILE_USE_URI,
+    GIT_USE_URI,
+    PROCESS_USE_URI,
+    SKILL_INDEX_URI,
+)
 from .envtools import env_diff as env_diff_impl
 from .envtools import env_snapshot as env_snapshot_impl
 from .pathing import resolve_cwd, resolve_path
@@ -123,6 +129,18 @@ def register_core_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
                 "delegate_guide_tool": "get_delegate_use",
                 "index_resource": SKILL_INDEX_URI,
                 "delegate_resource": DELEGATE_USE_URI,
+                "guide_tools": {
+                    "delegate-use": "get_delegate_use",
+                    "file-use": "get_file_use",
+                    "process-use": "get_process_use",
+                    "git-use": "get_git_use",
+                },
+                "guide_resources": {
+                    "delegate-use": DELEGATE_USE_URI,
+                    "file-use": FILE_USE_URI,
+                    "process-use": PROCESS_USE_URI,
+                    "git-use": GIT_USE_URI,
+                },
                 "progressive_disclosure": True,
             },
             "resources": resource_uris,

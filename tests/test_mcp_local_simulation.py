@@ -154,6 +154,9 @@ def test_mcp_removed_task_tools_are_not_exposed(tmp_path: Path, monkeypatch) -> 
                 assert "run_command" in names
                 assert "get_skill_index" in names
                 assert "get_delegate_use" in names
+                assert "get_file_use" in names
+                assert "get_process_use" in names
+                assert "get_git_use" in names
                 for removed in {
                     "run_command_stream",
                     "wait_task",
@@ -178,20 +181,46 @@ def test_mcp_skill_tools_and_resources_end_to_end(tmp_path: Path, monkeypatch) -
                 index = await _call_tool(session, "get_skill_index", {})
                 assert index["success"] is True
                 assert index["skills"][0]["guide_tool"] == "get_delegate_use"
+                assert [skill["name"] for skill in index["skills"]] == [
+                    "delegate-use",
+                    "file-use",
+                    "process-use",
+                    "git-use",
+                ]
 
                 guide_tool = await _call_tool(session, "get_delegate_use", {})
                 assert guide_tool["success"] is True
                 assert "# Delegate Use" in guide_tool["content"]
+                for tool_name, heading in [
+                    ("get_file_use", "# File Use"),
+                    ("get_process_use", "# Process Use"),
+                    ("get_git_use", "# Git Use"),
+                ]:
+                    guide = await _call_tool(session, tool_name, {})
+                    assert guide["success"] is True
+                    assert heading in guide["content"]
 
                 resources = await session.list_resources()
                 resource_uris = {str(resource.uri) for resource in resources.resources}
-                assert "skill://chatgpt-web-oauth-mcp/index" in resource_uris
-                assert "skill://chatgpt-web-oauth-mcp/delegate-use" in resource_uris
+                assert {
+                    "skill://chatgpt-web-oauth-mcp/index",
+                    "skill://chatgpt-web-oauth-mcp/delegate-use",
+                    "skill://chatgpt-web-oauth-mcp/file-use",
+                    "skill://chatgpt-web-oauth-mcp/process-use",
+                    "skill://chatgpt-web-oauth-mcp/git-use",
+                } <= resource_uris
 
                 guide_resource = await session.read_resource(
                     "skill://chatgpt-web-oauth-mcp/delegate-use"
                 )
                 assert "# Delegate Use" in guide_resource.contents[0].text
+                for uri, heading in [
+                    ("skill://chatgpt-web-oauth-mcp/file-use", "# File Use"),
+                    ("skill://chatgpt-web-oauth-mcp/process-use", "# Process Use"),
+                    ("skill://chatgpt-web-oauth-mcp/git-use", "# Git Use"),
+                ]:
+                    guide_resource = await session.read_resource(uri)
+                    assert heading in guide_resource.contents[0].text
 
         anyio.run(scenario)
 

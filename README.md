@@ -257,6 +257,9 @@ The watchdog checks service health. The doctor script applies targeted restarts 
 | `server_info` | Inspect runtime configuration and registered MCP tools |
 | `get_skill_index` | Discover progressive-disclosure operating guides and their trigger conditions |
 | `get_delegate_use` | Load the complete delegate operating contract before using delegate tools |
+| `get_file_use` | Load the file discovery, reading, code-map, editing, encoding, pagination, and CAS contract |
+| `get_process_use` | Load the command/job/tmux selection and lifecycle contract |
+| `get_git_use` | Load the repository, commit, history, and worktree safety contract |
 | `set_default_cwd` / `get_default_cwd` | Set or read the session-wide default working directory |
 | `env_snapshot` / `env_diff` | Collect a small read-only environment snapshot and compare two inline snapshots |
 
@@ -324,7 +327,7 @@ The watchdog checks service health. The doctor script applies targeted restarts 
 | `delegate_status` | Monitor a delegate, group, project, or active/recent registry state |
 | `delegate_cancel` | Cancel one delegate or every child in one exploration group |
 
-Before the first delegate tool call in a task, call `get_skill_index`, then `get_delegate_use`. This mirrors tool-plus-skill systems such as Figma's: tool schemas describe individual arguments, while the guide carries cross-tool workflow, safety, scheduling, monitoring, and recovery rules.
+Call `get_skill_index` to discover guides, then load the matching guide before the first workflow in that tool family: `get_file_use`, `get_process_use`, `get_git_use`, or `get_delegate_use`. This mirrors tool-plus-skill systems such as Figma's: tool schemas describe individual arguments, while guides carry cross-tool workflow, safety, lifecycle, monitoring, and recovery rules.
 
 The same authoritative content is also exposed through standard MCP resources:
 
@@ -332,8 +335,11 @@ The same authoritative content is also exposed through standard MCP resources:
 | --- | --- |
 | `skill://chatgpt-web-oauth-mcp/index` | Machine-readable guide index, triggers, and tool/resource routing |
 | `skill://chatgpt-web-oauth-mcp/delegate-use` | Complete Markdown delegate guide |
+| `skill://chatgpt-web-oauth-mcp/file-use` | Complete Markdown file workflow guide |
+| `skill://chatgpt-web-oauth-mcp/process-use` | Complete Markdown command, job, and tmux guide |
+| `skill://chatgpt-web-oauth-mcp/git-use` | Complete Markdown Git and worktree guide |
 
-Tools and resources are intentionally both exposed. Native MCP clients may use `resources/list` and `resources/read`; gateways such as Pi can call `get_skill_index` and `get_delegate_use` even when they surface resources only as tools. The guide has one source in the server package, preventing a filesystem copy from drifting. Pi explore's `--no-skills` flag disables Pi-local skill injection inside the delegated subprocess; it does not disable these MCP guidance endpoints used by the managing agent.
+Tools and resources are intentionally both exposed. Native MCP clients may use `resources/list` and `resources/read`; gateways such as Pi can call `get_skill_index` and the matching `get_*_use` tool even when they surface resources only as tools. Each guide has one source in the server package, preventing filesystem copies from drifting. Pi explore's `--no-skills` flag disables Pi-local skill injection inside the delegated subprocess; it does not disable these MCP guidance endpoints used by the managing agent.
 
 The scheduler and process runner depend only on the `DelegateHarness` adapter protocol. Codex and Pi are built-in adapters; additional stdin-driven agents can be registered programmatically with `GenericCliHarness`, including separate code/read-only commands and model/reasoning argument templates. A custom harness must explicitly provide a read-only command before it can accept `kind=explore`; prompt wording alone never grants that capability.
 
