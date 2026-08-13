@@ -40,8 +40,20 @@ def _config(tmp_path: Path) -> LaunchdServiceConfig:
             "CHATGPT_MCP_OAUTH_SCOPES": "local-ops",
             "CHATGPT_MCP_OAUTH_TOKEN_TTL_SECONDS": "86400",
             "CHATGPT_MCP_CODEX_COMMAND": "codex",
+            "CHATGPT_MCP_PI_COMMAND": "pi",
             "CHATGPT_MCP_COMMAND_TIMEOUT": "120",
             "CHATGPT_MCP_DELEGATE_TIMEOUT": "300",
+            "CHATGPT_MCP_DELEGATE_DEFAULT_HARNESS": "pi",
+            "CHATGPT_MCP_DELEGATE_WAIT_TIMEOUT": "45",
+            "CHATGPT_MCP_DELEGATE_EXPLORE_EXECUTION_TIMEOUT": "900",
+            "CHATGPT_MCP_DELEGATE_CODE_EXECUTION_TIMEOUT": "3600",
+            "CHATGPT_MCP_DELEGATE_CANCEL_GRACE_SECONDS": "5",
+            "CHATGPT_MCP_DELEGATE_EXPLORE_MAX_PER_PROJECT": "4",
+            "CHATGPT_MCP_DELEGATE_EXPLORE_MAX_GLOBAL": "8",
+            "CHATGPT_MCP_DELEGATE_CODE_MAX_PER_PROJECT": "1",
+            "CHATGPT_MCP_DELEGATE_CODE_MAX_GLOBAL": "4",
+            "CHATGPT_MCP_DELEGATE_QUEUE_LIMIT_PER_PROJECT": "32",
+            "CHATGPT_MCP_DELEGATE_QUEUE_LIMIT_GLOBAL": "128",
             "CHATGPT_MCP_DEBUG_MCP_LOGGING": "1",
             "CHATGPT_MCP_GRACEFUL_SHUTDOWN_SECONDS": "30",
         },
@@ -69,11 +81,42 @@ def test_build_mcp_launch_agent_contains_supervisor_and_runtime_env(tmp_path: Pa
     assert payload["EnvironmentVariables"]["CHATGPT_MCP_AUTH_TOKEN"] == "secret-token"
     assert payload["EnvironmentVariables"]["CHATGPT_MCP_AUTH_MODE"] == "oauth"
     assert payload["EnvironmentVariables"]["CHATGPT_MCP_PUBLIC_BASE_URL"] == "https://mcp.example.test"
+    assert payload["EnvironmentVariables"]["CHATGPT_MCP_PI_COMMAND"] == "pi"
+    assert payload["EnvironmentVariables"]["CHATGPT_MCP_DELEGATE_DEFAULT_HARNESS"] == "pi"
+    assert payload["EnvironmentVariables"]["CHATGPT_MCP_DELEGATE_WAIT_TIMEOUT"] == "45"
+    assert payload["EnvironmentVariables"]["CHATGPT_MCP_DELEGATE_EXPLORE_MAX_GLOBAL"] == "8"
+    assert payload["EnvironmentVariables"]["CHATGPT_MCP_DELEGATE_CODE_MAX_GLOBAL"] == "4"
+    assert payload["EnvironmentVariables"]["CHATGPT_MCP_DELEGATE_QUEUE_LIMIT_GLOBAL"] == "128"
     assert payload["EnvironmentVariables"]["PATH"] == "/opt/homebrew/bin:/usr/bin:/bin"
     assert payload["StandardOutPath"] == str(config.logs_dir / "mcp.stdout.log")
     assert payload["StandardErrorPath"] == str(config.logs_dir / "mcp.stderr.log")
     assert payload["SoftResourceLimits"] == {"NumberOfFiles": 4096}
     assert payload["HardResourceLimits"] == {"NumberOfFiles": 4096}
+
+
+def test_install_launchd_forwards_delegate_harness_env() -> None:
+    source = (Path(__file__).parents[1] / "scripts" / "install-launchd.sh").read_text(
+        encoding="utf-8"
+    )
+    env_keys_start = source.index("env_keys = {")
+    env_keys_end = source.index("}\nconfig =", env_keys_start)
+    env_keys_block = source[env_keys_start:env_keys_end]
+
+    for name in {
+        "CHATGPT_MCP_PI_COMMAND",
+        "CHATGPT_MCP_DELEGATE_DEFAULT_HARNESS",
+        "CHATGPT_MCP_DELEGATE_WAIT_TIMEOUT",
+        "CHATGPT_MCP_DELEGATE_EXPLORE_EXECUTION_TIMEOUT",
+        "CHATGPT_MCP_DELEGATE_CODE_EXECUTION_TIMEOUT",
+        "CHATGPT_MCP_DELEGATE_CANCEL_GRACE_SECONDS",
+        "CHATGPT_MCP_DELEGATE_EXPLORE_MAX_PER_PROJECT",
+        "CHATGPT_MCP_DELEGATE_EXPLORE_MAX_GLOBAL",
+        "CHATGPT_MCP_DELEGATE_CODE_MAX_PER_PROJECT",
+        "CHATGPT_MCP_DELEGATE_CODE_MAX_GLOBAL",
+        "CHATGPT_MCP_DELEGATE_QUEUE_LIMIT_PER_PROJECT",
+        "CHATGPT_MCP_DELEGATE_QUEUE_LIMIT_GLOBAL",
+    }:
+        assert f'"{name}"' in env_keys_block
 
 
 def test_build_cloudflared_launch_agent_uses_named_tunnel_when_present(tmp_path: Path) -> None:

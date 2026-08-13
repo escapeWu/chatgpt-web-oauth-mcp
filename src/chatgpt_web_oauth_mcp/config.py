@@ -3,7 +3,7 @@
 Semantic note on ``WORKSPACE_ROOT`` / ``DEFAULT_CWD``
 -----------------------------------------------------
 Despite the name "root", this value is **not a sandbox boundary**. The project
-is designed to give an MCP client (ChatGPT Web / Codex) arbitrary
+is designed to give an authorized MCP client arbitrary
 local-shell capability; once a client passes the bearer token it has full shell
 and full-filesystem access.
 
@@ -72,8 +72,52 @@ OAUTH_SCOPES = tuple(
 )
 OAUTH_TOKEN_TTL_SECONDS = int(os.environ.get("CHATGPT_MCP_OAUTH_TOKEN_TTL_SECONDS", "86400"))
 CODEX_COMMAND = os.environ.get("CHATGPT_MCP_CODEX_COMMAND", "codex").strip()
+PI_COMMAND = os.environ.get("CHATGPT_MCP_PI_COMMAND", "pi").strip()
+DELEGATE_DEFAULT_HARNESS = (
+    os.environ.get("CHATGPT_MCP_DELEGATE_DEFAULT_HARNESS", "codex").strip().lower()
+    or "codex"
+)
 COMMAND_TIMEOUT = int(os.environ.get("CHATGPT_MCP_COMMAND_TIMEOUT", "120"))
-DELEGATE_TIMEOUT = int(os.environ.get("CHATGPT_MCP_DELEGATE_TIMEOUT", "300"))
+DELEGATE_TIMEOUT = _positive_env_int("CHATGPT_MCP_DELEGATE_TIMEOUT", 300)
+DELEGATE_WAIT_TIMEOUT = _positive_env_int(
+    "CHATGPT_MCP_DELEGATE_WAIT_TIMEOUT",
+    DELEGATE_TIMEOUT,
+)
+DELEGATE_EXPLORE_EXECUTION_TIMEOUT = _positive_env_int(
+    "CHATGPT_MCP_DELEGATE_EXPLORE_EXECUTION_TIMEOUT",
+    900,
+)
+DELEGATE_CODE_EXECUTION_TIMEOUT = _positive_env_int(
+    "CHATGPT_MCP_DELEGATE_CODE_EXECUTION_TIMEOUT",
+    3600,
+)
+DELEGATE_CANCEL_GRACE_SECONDS = float(
+    os.environ.get("CHATGPT_MCP_DELEGATE_CANCEL_GRACE_SECONDS", "5")
+)
+DELEGATE_EXPLORE_MAX_PER_PROJECT = _positive_env_int(
+    "CHATGPT_MCP_DELEGATE_EXPLORE_MAX_PER_PROJECT",
+    4,
+)
+DELEGATE_EXPLORE_MAX_GLOBAL = _positive_env_int(
+    "CHATGPT_MCP_DELEGATE_EXPLORE_MAX_GLOBAL",
+    8,
+)
+DELEGATE_CODE_MAX_PER_PROJECT = _positive_env_int(
+    "CHATGPT_MCP_DELEGATE_CODE_MAX_PER_PROJECT",
+    1,
+)
+DELEGATE_CODE_MAX_GLOBAL = _positive_env_int(
+    "CHATGPT_MCP_DELEGATE_CODE_MAX_GLOBAL",
+    4,
+)
+DELEGATE_QUEUE_LIMIT_PER_PROJECT = _positive_env_int(
+    "CHATGPT_MCP_DELEGATE_QUEUE_LIMIT_PER_PROJECT",
+    32,
+)
+DELEGATE_QUEUE_LIMIT_GLOBAL = _positive_env_int(
+    "CHATGPT_MCP_DELEGATE_QUEUE_LIMIT_GLOBAL",
+    128,
+)
 TOOL_OUTPUT_TOKEN_BUDGET = resolve_token_budget(
     os.environ.get(
         "CHATGPT_MCP_TOOL_OUTPUT_TOKEN_BUDGET",

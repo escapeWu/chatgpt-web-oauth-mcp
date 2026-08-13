@@ -19,20 +19,43 @@ def test_server_info_reports_metadata_and_tools() -> None:
     assert payload["auth"] in {"none", "shared_token", "oauth"}
     assert payload["command_timeout_seconds"] >= 1
     assert payload["delegate_timeout_seconds"] >= 1
-    assert payload["delegate_mode"] == {
-        "executor": "codex",
-        "serial": True,
-        "background_tasks": False,
-        "default_wait_seconds": 300,
-        "continuation": "call delegate_task again when status is running",
-        "audit_logs": "system temp / chatgpt-web-oauth-mcp / codex-delegates",
-        "log_progress": "use read_text on returned stdout/stderr/metadata paths",
-        "raw_output": "stdout/stderr are stored in logs and not inlined in completed responses",
-        "status_recovery": "use delegate_status to list active/recent server-generated delegate_id values",
-        "status_monitor": "delegate_status supports watch_seconds up to 300 and polls every 5s by default",
+    assert payload["delegate_wait_timeout_seconds"] >= 1
+    delegate_mode = payload["delegate_mode"]
+    assert delegate_mode["executor"] == "codex"
+    assert delegate_mode["default_harness"] == "codex"
+    assert set(delegate_mode["harnesses"]) == {"codex", "pi"}
+    assert delegate_mode["harnesses"]["pi"]["read_only_supported"] is True
+    assert delegate_mode["scheduler"] == "project_scoped_fair_reader_writer"
+    assert delegate_mode["serial"] is False
+    assert delegate_mode["background_tasks"] is True
+    assert delegate_mode["explore"] == {
+        "lane": "reader",
+        "model": "gpt-5.6-luna",
+        "reasoning_effort": "low",
+        "sandbox_mode": "read-only",
+        "execution_timeout_seconds": 900,
+    }
+    assert delegate_mode["code"] == {
+        "lane": "writer",
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "xhigh",
+        "sandbox_mode": "danger-full-access",
+        "execution_timeout_seconds": 3600,
     }
     assert payload["routing_contract"]["chatgpt_web_role"] == "architect_manager_reviewer"
-    assert payload["routing_contract"]["codex_delegate_role"] == "single_bounded_execution_slice"
+    assert payload["routing_contract"]["codex_delegate_role"] == "project_scoped_reader_writer_execution"
+    assert payload["skill_guidance"] == {
+        "discovery_tool": "get_skill_index",
+        "delegate_guide_tool": "get_delegate_use",
+        "index_resource": "skill://chatgpt-web-oauth-mcp/index",
+        "delegate_resource": "skill://chatgpt-web-oauth-mcp/delegate-use",
+        "progressive_disclosure": True,
+    }
+    assert payload["resources"] == [
+        "skill://chatgpt-web-oauth-mcp/delegate-use",
+        "skill://chatgpt-web-oauth-mcp/index",
+    ]
+    assert payload["resource_count"] == len(payload["resources"])
     tools = payload["tools"]
     assert isinstance(tools, list)
     assert "obsidian_proxy" not in payload
@@ -62,7 +85,11 @@ def test_server_info_reports_metadata_and_tools() -> None:
         "tmux_send",
         "tmux_kill",
         "delegate_task",
+        "delegate_batch",
         "delegate_status",
+        "delegate_cancel",
+        "get_skill_index",
+        "get_delegate_use",
     ]:
         assert name in tools, f"expected {name} in tools list"
     for name in [

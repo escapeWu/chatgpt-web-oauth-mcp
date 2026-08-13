@@ -43,7 +43,7 @@ DelegateModel = (
 
 
 def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
-    """Register git, synchronous shell, and serial Codex delegate tools."""
+    """Register git, synchronous shell, and CLI-harness delegate tools."""
 
     @mcp.tool(
         name="git_status",
@@ -578,201 +578,77 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
     ) -> dict[str, object]:
         return ctx.job_registry.kill_job(job_id=job_id, state_dir=ctx.state_dir, signal_name=signal)
 
+    delegate_description = (
+        "Run one project-scoped task through a configured CLI harness. Select harness=codex or "
+        "harness=pi; omitted harness uses the server default. Codex kind=explore uses "
+        "gpt-5.6-luna + low in a hard read-only sandbox; Codex kind=code uses gpt-5.6-sol + "
+        "xhigh and is the exclusive project "
+        "writer. Readers may overlap, writers are FIFO and exclusive, and separate projects can "
+        "run independently. Model routing also supports gpt-5.6-terra for single-module work, "
+        "gpt-5.6-luna for code search, and gpt-5.3-codex-spark with reasoning_effort unset/default. "
+        "For general delegation, omit or pass empty/default for both model and reasoning_effort. "
+        "Use delegate_status with the returned delegate_id after a wait timeout."
+    )
+
     @mcp.tool(
         name="delegate_task",
         title="Delegate Task",
         annotations=OPEN_WORLD_WRITE_TOOL,
-        description=(
-            "Fallback executor only. Run exactly one bounded Codex Execution Prompt, serialized "
-            "behind any other active Codex delegate call. ChatGPT Web should act as the "
-            "architect/manager: inspect, plan, and review with direct MCP tools, then call this "
-            "only for a small local execution slice. Blocks for up to timeout/wait_seconds "
-            "(default 300s) and returns status=running when Codex is still working; Codex "
-            "continues running and callers can invoke this tool again to continue waiting. "
-            "Each run writes private audit logs under the system temporary cache directory and "
-            "returns their paths in logs; callers can use read_text on stdout/stderr/metadata "
-            "to inspect live progress. Completed responses do not inline stdout/stderr; use logs "
-            "for raw output. If another non-matching delegate is active, the requested new task is "
-            "not started and the response includes request_conflict/new_task_started=false. "
-            "Optionally provide output_schema and parse_structured_output=true to capture JSON output. "
-            "Model routing: use gpt-5.6-sol for the hardest architecture, quantitative-model "
-            "RCA, trading-training design, research, and complex code review; gpt-5.6-terra "
-            "for regular feature development, single-module implementation, test repair, and "
-            "data analysis; gpt-5.6-luna for code search, format conversion, simple scripts, "
-            "and batch mechanical work. For fast context-gathering tasks, "
-            "gpt-5.3-codex-spark remains available with reasoning_effort unset/default. For "
-            "general delegation, omit or pass empty/default for both model and reasoning_effort."
-        ),
+        description=delegate_description,
     )
     def delegate_task(
-        task: Annotated[
-            str | None,
-            Field(
-                description=(
-                    "Concrete work instruction for Codex. Required when starting a new delegate "
-                    "unless goal is provided. Omit task and goal on a later call to continue "
-                    "waiting for the currently running delegate."
-                )
-            ),
-        ] = None,
-        goal: Annotated[
-            str | None,
-            Field(
-                description=(
-                    "High-level objective or context for this one Codex execution slice. Required "
-                    "when starting a new delegate unless task is provided. Can be combined with task."
-                )
-            ),
-        ] = None,
-        task_id: Annotated[
-            str | None,
-            Field(
-                description=(
-                    "Optional caller-defined id for this single execution slice, e.g. T3 or "
-                    "audit-step4-label-alignment. Used only in the Codex prompt and result context."
-                )
-            ),
-        ] = None,
-        cwd: Annotated[
-            str | None,
-            Field(
-                description=(
-                    "Working directory for the Codex delegate. Relative paths resolve from the "
-                    "server default cwd; absolute paths are used as-is."
-                )
-            ),
-        ] = None,
-        files_in_scope: Annotated[
-            list[str] | None,
-            Field(
-                description=(
-                    "Optional paths Codex is allowed or expected to inspect/change for this single "
-                    "execution slice. Keep this narrow to avoid opaque long-running analysis."
-                )
-            ),
-        ] = None,
-        out_of_scope: Annotated[
-            list[str] | None,
-            Field(
-                description=(
-                    "Optional paths, actions, or topics Codex must avoid while executing this slice."
-                )
-            ),
-        ] = None,
-        context_files: Annotated[
-            list[str] | None,
-            Field(
-                description=(
-                    "Optional file paths to mention in the Codex prompt as relevant context. "
-                    "The server does not read or attach them automatically."
-                )
-            ),
-        ] = None,
-        acceptance_criteria: Annotated[
-            list[str] | None,
-            Field(description="Optional checklist of conditions Codex should satisfy before finishing."),
-        ] = None,
-        done_means: Annotated[
-            list[str] | None,
-            Field(
-                description=(
-                    "Optional explicit completion contract for this slice, such as changed files, "
-                    "expected report sections, or verification evidence required before returning."
-                )
-            ),
-        ] = None,
-        verification_commands: Annotated[
-            list[str] | None,
-            Field(description="Optional shell commands Codex should consider running to verify the work."),
-        ] = None,
-        commit_mode: Annotated[
-            Literal["allowed", "required", "forbidden"],
-            Field(
-                description=(
-                    "Whether Codex may create commits: allowed permits commits, required asks Codex "
-                    "to commit if it changes files, forbidden tells Codex not to commit."
-                )
-            ),
-        ] = "allowed",
+        task: Annotated[str | None, Field(description="Concrete bounded instruction; required unless goal is provided.")] = None,
+        harness: Annotated[str | None, Field(description="CLI harness name, currently codex or pi; omit to use the configured default.")] = None,
+        kind: Annotated[Literal["explore", "code"], Field(description="Read-only reader or exclusive coding writer.")] = "code",
+        goal: Annotated[str | None, Field(description="Optional objective or context for this execution slice.")] = None,
+        task_id: Annotated[str | None, Field(description="Optional caller-defined task label.")] = None,
+        cwd: Annotated[str | None, Field(description="Task working directory; defaults to the session cwd.")] = None,
+        group_id: Annotated[str | None, Field(description="Optional existing logical group label for advanced callers.")] = None,
+        depends_on_group_ids: Annotated[list[str] | None, Field(description="Groups that must complete before a code task may start.")] = None,
+        files_in_scope: Annotated[list[str] | None, Field(description="Paths the delegate may inspect or change within this slice.")] = None,
+        out_of_scope: Annotated[list[str] | None, Field(description="Paths, actions, or topics the delegate must avoid.")] = None,
+        context_files: Annotated[list[str] | None, Field(description="Relevant file paths to mention in the delegate prompt.")] = None,
+        acceptance_criteria: Annotated[list[str] | None, Field(description="Conditions the delegate should satisfy before finishing.")] = None,
+        done_means: Annotated[list[str] | None, Field(description="Explicit completion evidence required from the delegate.")] = None,
+        verification_commands: Annotated[list[str] | None, Field(description="Commands the delegate should use to verify code work.")] = None,
+        commit_mode: Annotated[Literal["allowed", "required", "forbidden"], Field(description="Commit permission for code tasks; explore always forces forbidden.")] = "allowed",
         model: Annotated[
             DelegateModel,
-            Field(
-                description=(
-                    "Optional Codex model override. Recommended choices: gpt-5.6-sol is the "
-                    "flagship for complex reasoning, long tasks, coding, research, and strong "
-                    "tool collaboration (system architecture, quantitative-model RCA, "
-                    "trading-training design, complex code review); gpt-5.6-terra is the "
-                    "cost-effective default for regular development, single-module work, test "
-                    "repair, and data analysis; gpt-5.6-luna is the fastest, lowest-cost option "
-                    "for code search, format conversion, simple scripts, and batch mechanical "
-                    "tasks. gpt-5.3-codex-spark remains suitable for fast context-gathering tasks with "
-                    "reasoning_effort unset/default. Omit or pass default to inherit the Codex "
-                    "CLI/user config. Other model names remain accepted for forward compatibility; "
-                    "non-default values are passed as --model <value> to codex exec."
-                )
-            ),
+            Field(description=(
+                "Optional model override. gpt-5.6-sol is strongest for architecture and complex work; "
+                "gpt-5.6-terra fits regular development and single-module work; gpt-5.6-luna fits code search; "
+                "gpt-5.3-codex-spark fits fast context-gathering tasks with Codex. With harness=pi, "
+                "use Pi's provider/model pattern, or omit/default to inherit Pi configuration."
+            )),
         ] = None,
         reasoning_effort: Annotated[
             Literal["default", "none", "minimal", "low", "medium", "high", "xhigh", "max"],
-            Field(
-                description=(
-                    "Optional Codex reasoning effort override for this delegate call. Use default "
-                    "to inherit the Codex CLI/user config; otherwise the server passes "
-                    "-c model_reasoning_effort=<value> to codex exec. Common combinations: leave "
-                    "unset/default with model=gpt-5.3-codex-spark for fast context-gathering tasks; "
-                    "omit or pass empty/default for general delegation."
-                )
-            ),
+            Field(description=(
+                "Optional reasoning override. Use model=gpt-5.3-codex-spark with unset/default for fast "
+                "context gathering; omit/default for general delegation or to inherit Pi configuration."
+            )),
         ] = "default",
-        timeout: Annotated[
-            int | None,
-            Field(
-                description=(
-                    "Soft MCP wait timeout in seconds. Defaults to CHATGPT_MCP_DELEGATE_TIMEOUT "
-                    "(normally 300). When exceeded, the tool returns status=running with log paths; "
-                    "the Codex subprocess is not killed."
-                )
-            ),
-        ] = None,
-        wait_seconds: Annotated[
-            float | None,
-            Field(
-                description=(
-                    "Optional override for how long this MCP call should block waiting for Codex. "
-                    "Defaults to timeout. If Codex is still running after this wait, the tool "
-                    "returns status=running and log paths; call delegate_task again to continue waiting."
-                )
-            ),
-        ] = None,
-        output_schema: Annotated[
-            dict[str, object] | None,
-            Field(
-                description=(
-                    "Optional JSON schema describing the structured result expected from Codex. "
-                    "Returned in output_schema and used only as prompt/context metadata."
-                )
-            ),
-        ] = None,
-        parse_structured_output: Annotated[
-            bool,
-            Field(
-                description=(
-                    "When true, the server tries to parse JSON from Codex stdout/stderr and returns "
-                    "it as structured_output."
-                )
-            ),
-        ] = True,
+        timeout: Annotated[int | None, Field(description="Deprecated alias for this MCP call's wait window in seconds.", gt=0)] = None,
+        wait_seconds: Annotated[float | None, Field(description="How long this MCP call waits before returning queued/running status.", ge=0)] = None,
+        execution_timeout_seconds: Annotated[int | None, Field(description="Hard subprocess lifetime limit; defaults to 900s explore or 3600s code.", gt=0)] = None,
+        output_schema: Annotated[dict[str, object] | None, Field(description="Optional expected JSON result schema metadata.")] = None,
+        parse_structured_output: Annotated[bool, Field(description="Parse best-effort JSON from the process logs.")] = True,
     ) -> dict[str, object]:
         resolved_cwd = resolve_cwd(cwd, ctx.workspace_root)
-        effective_timeout = timeout if timeout is not None else ctx.delegate_timeout
-        effective_wait_seconds = wait_seconds if wait_seconds is not None else effective_timeout
-        return ctx.registry.run_codex(
+        effective_wait = wait_seconds if wait_seconds is not None else timeout
+        if effective_wait is None:
+            effective_wait = ctx.delegate_wait_timeout
+        return ctx.registry.run_delegate(
             task=task,
+            harness=harness,
+            kind=kind,
             goal=goal,
             task_id=task_id,
             cwd=resolved_cwd,
-            timeout=effective_timeout,
-            wait_seconds=effective_wait_seconds,
+            group_id=group_id,
+            depends_on_group_ids=depends_on_group_ids,
+            wait_seconds=effective_wait,
+            execution_timeout_seconds=execution_timeout_seconds,
             files_in_scope=files_in_scope,
             out_of_scope=out_of_scope,
             context_files=context_files,
@@ -787,67 +663,73 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         )
 
     @mcp.tool(
+        name="delegate_batch",
+        title="Delegate Exploration Batch",
+        annotations=OPEN_WORLD_WRITE_TOOL,
+        description="Fan out multiple read-only explore tasks in one project and wait for the complete group barrier.",
+    )
+    def delegate_batch(
+        tasks: Annotated[list[dict[str, object]], Field(description="Explore task specifications; each requires task or goal.", min_length=1)],
+        harness: Annotated[str | None, Field(description="CLI harness name for every child, currently codex or pi; omit for the server default.")] = None,
+        cwd: Annotated[str | None, Field(description="Project working directory for every child task.")] = None,
+        max_concurrency: Annotated[int | None, Field(description="Optional group concurrency cap within the project limit.", gt=0)] = None,
+        wait_seconds: Annotated[float | None, Field(description="How long to wait for all children before returning group status.", ge=0)] = None,
+        execution_timeout_seconds: Annotated[int | None, Field(description="Hard lifetime limit for each explore child.", gt=0)] = None,
+        model: Annotated[DelegateModel, Field(description="Optional model override for all children; Codex defaults to gpt-5.6-luna while Pi inherits its configuration.")] = None,
+        reasoning_effort: Annotated[Literal["default", "none", "minimal", "low", "medium", "high", "xhigh", "max"], Field(description="Optional reasoning override for all children; Codex defaults to low while Pi inherits its configuration.")] = "default",
+    ) -> dict[str, object]:
+        resolved_cwd = resolve_cwd(cwd, ctx.workspace_root)
+        return ctx.registry.run_delegate_batch(
+            tasks=tasks,
+            harness=harness,
+            cwd=resolved_cwd,
+            max_concurrency=max_concurrency,
+            wait_seconds=wait_seconds if wait_seconds is not None else ctx.delegate_wait_timeout,
+            execution_timeout_seconds=execution_timeout_seconds,
+            model=model,
+            reasoning_effort=reasoning_effort,
+        )
+
+    @mcp.tool(
         name="delegate_status",
         title="Delegate Status",
         annotations=READ_ONLY_TOOL,
-        description=(
-            "Inspect the current and recent Codex delegates without relying on ChatGPT Web "
-            "to remember a caller-generated task_id. Returns the active delegate, latest "
-            "delegate, and a recent list with server-generated delegate_id values plus log "
-            "paths. Pass delegate_id to fetch one known delegate. Set watch_seconds up to "
-            "300 to long-poll every poll_seconds seconds and return early only when task "
-            "status changes; if no status change occurs, the last snapshot is returned."
-        ),
+        description="Inspect one delegate, one group, one project, or the global active/recent registry; supports lifecycle long-polling.",
     )
     def delegate_status(
-        delegate_id: Annotated[
-            str | None,
-            Field(
-                description=(
-                    "Optional server-generated delegate_id to inspect. Omit to list the active "
-                    "delegate and recent completed delegates."
-                )
-            ),
-        ] = None,
-        limit: Annotated[
-            int,
-            Field(description="Maximum recent delegates to return. Hard limit: 20.", ge=1, le=20),
-        ] = 10,
-        offset: Annotated[
-            int,
-            Field(description="Number of recent delegates to skip for pagination.", ge=0),
-        ] = 0,
-        watch_seconds: Annotated[
-            float,
-            Field(
-                description=(
-                    "Optional long-poll window in seconds. Use 300 for a five-minute monitor. "
-                    "When positive, delegate_status polls until task status changes or the "
-                    "watch window expires. Hard limit: 300."
-                ),
-                ge=0,
-                le=300,
-            ),
-        ] = 0,
-        poll_seconds: Annotated[
-            float,
-            Field(
-                description=(
-                    "Polling interval in seconds while watch_seconds is positive. Defaults to 5."
-                ),
-                ge=0.1,
-                le=60,
-            ),
-        ] = 5,
+        delegate_id: Annotated[str | None, Field(description="Optional server-generated delegate id.")] = None,
+        group_id: Annotated[str | None, Field(description="Optional server-generated exploration group id.")] = None,
+        project_cwd: Annotated[str | None, Field(description="Optional cwd resolved server-side to a project identity.")] = None,
+        limit: Annotated[int, Field(description="Maximum recent delegates to return.", ge=1, le=20)] = 10,
+        offset: Annotated[int, Field(description="Recent delegate pagination offset.", ge=0)] = 0,
+        watch_seconds: Annotated[float, Field(description="Long-poll window, returning on lifecycle or group-count changes.", ge=0, le=300)] = 0,
+        poll_seconds: Annotated[float, Field(description="Long-poll interval in seconds.", ge=0.1, le=60)] = 5,
     ) -> dict[str, object]:
+        resolved_project_cwd = (
+            str(resolve_cwd(project_cwd, ctx.workspace_root)) if project_cwd else None
+        )
         return ctx.registry.delegate_status(
             delegate_id=delegate_id,
+            group_id=group_id,
+            project_cwd=resolved_project_cwd,
             limit=limit,
             offset=offset,
             watch_seconds=watch_seconds,
             poll_seconds=poll_seconds,
             max_tokens=ctx.tool_output_token_budget,
         )
+
+    @mcp.tool(
+        name="delegate_cancel",
+        title="Cancel Delegate",
+        annotations=OPEN_WORLD_WRITE_TOOL,
+        description="Cancel exactly one delegate or every queued/running child in one exploration group; running process groups receive TERM then KILL.",
+    )
+    def delegate_cancel(
+        delegate_id: Annotated[str | None, Field(description="Delegate id to cancel; mutually exclusive with group_id.")] = None,
+        group_id: Annotated[str | None, Field(description="Group id whose children should all be cancelled.")] = None,
+    ) -> dict[str, object]:
+        return ctx.registry.delegate_cancel(delegate_id=delegate_id, group_id=group_id)
 
     return {
         "git_status": git_status,
@@ -868,5 +750,7 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         "job_tail": job_tail,
         "job_kill": job_kill,
         "delegate_task": delegate_task,
+        "delegate_batch": delegate_batch,
         "delegate_status": delegate_status,
+        "delegate_cancel": delegate_cancel,
     }

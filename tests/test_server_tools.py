@@ -710,8 +710,14 @@ def test_registered_tool_input_schemas_document_parameters() -> None:
     ]
     for name in ["task_id", "files_in_scope", "out_of_scope", "done_means", "model", "reasoning_effort"]:
         assert name in schemas["delegate_task"]["properties"]
-    for name in ["delegate_id", "limit", "watch_seconds", "poll_seconds"]:
+    for name in ["harness", "kind", "execution_timeout_seconds", "depends_on_group_ids"]:
+        assert name in schemas["delegate_task"]["properties"]
+    for name in ["tasks", "harness", "max_concurrency", "wait_seconds", "execution_timeout_seconds"]:
+        assert name in schemas["delegate_batch"]["properties"]
+    for name in ["delegate_id", "group_id", "project_cwd", "limit", "watch_seconds", "poll_seconds"]:
         assert name in schemas["delegate_status"]["properties"]
+    for name in ["delegate_id", "group_id"]:
+        assert name in schemas["delegate_cancel"]["properties"]
 
 
 def test_server_tools_expose_chatgpt_compatible_annotations() -> None:
@@ -754,7 +760,11 @@ def test_server_tools_expose_chatgpt_compatible_annotations() -> None:
     assert annotations["job_list"]["readOnlyHint"] is True
     assert annotations["job_output"]["readOnlyHint"] is True
     assert annotations["delegate_task"]["openWorldHint"] is True
+    assert annotations["delegate_batch"]["openWorldHint"] is True
     assert annotations["delegate_status"]["readOnlyHint"] is True
+    assert annotations["delegate_cancel"]["openWorldHint"] is True
+    assert annotations["get_skill_index"]["readOnlyHint"] is True
+    assert annotations["get_delegate_use"]["readOnlyHint"] is True
     for removed in [
         "run_command_stream",
         "get_task",
