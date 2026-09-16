@@ -175,6 +175,18 @@ def test_close_preserves_runtime_id_and_reattaches_live_thread(tmp_path: Path) -
     assert resumed["resume_mode"] == "reattached"
     assert [name for name, _ in adapter.calls].count("thread/resume") == 0
 
+    manager.close_runtime(runtime_id)
+    resumed_by_thread = manager.resume_runtime(
+        runtime_id=None,
+        thread_id=thread_id,
+        cwd=None,
+        sandbox=None,
+    )
+    assert resumed_by_thread["runtime_id"] == runtime_id
+    assert resumed_by_thread["thread_id"] == thread_id
+    assert resumed_by_thread["resume_mode"] == "reattached"
+    assert [name for name, _ in adapter.calls].count("thread/resume") == 0
+
 
 def test_resume_recreates_harness_only_thread_after_no_rollout(tmp_path: Path) -> None:
     project = tmp_path / "project"
@@ -212,6 +224,19 @@ def test_resume_recreates_harness_only_thread_after_no_rollout(tmp_path: Path) -
     assert resumed["resume_mode"] == "recreated"
     assert resumed["thread_recreated"] is True
     assert resumed["previous_thread_id"] == previous_thread_id
+
+    third_adapter = NoRolloutAdapter()
+    third_adapter.thread_number = 20
+    third_manager = _manager(tmp_path, third_adapter)
+    resumed_by_unbound_thread = third_manager.resume_runtime(
+        runtime_id=None,
+        thread_id=previous_thread_id,
+        cwd=project,
+        sandbox="workspace-write",
+    )
+    assert resumed_by_unbound_thread["runtime_id"] != runtime_id
+    assert resumed_by_unbound_thread["thread_recreated"] is True
+    assert resumed_by_unbound_thread["previous_thread_id"] == previous_thread_id
 
 
 def test_inventory_budget_preserves_server_identity_and_tool_keys() -> None:

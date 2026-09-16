@@ -220,20 +220,35 @@ class CodexRuntimeManager:
             target_thread_id = existing.thread_id
         else:
             assert thread_id is not None
-            if cwd is None or sandbox is None:
-                raise CodexRuntimeError(
-                    "resume_metadata_required",
-                    "Resuming by thread_id requires both cwd and sandbox for binding verification.",
-                )
             target_thread_id = thread_id.strip()
-            expected_cwd = self._validate_cwd(cwd)
-            expected_sandbox = validate_sandbox(sandbox)
             with self._lock:
-                if any(item.thread_id == target_thread_id for item in self._bindings.values()):
+                existing = next(
+                    (item for item in self._bindings.values() if item.thread_id == target_thread_id),
+                    None,
+                )
+            if existing is not None:
+                expected_cwd = self._validate_cwd(cwd) if cwd is not None else Path(existing.cwd)
+                if expected_cwd != Path(existing.cwd).resolve():
                     raise CodexRuntimeError(
-                        "thread_already_bound",
-                        "The supplied thread_id is already bound to a runtime.",
+                        "runtime_metadata_mismatch",
+                        "The supplied cwd does not match the persisted runtime binding.",
+                        details={"runtime_id": existing.runtime_id, "expected_cwd": existing.cwd},
                     )
+                expected_sandbox = validate_sandbox(sandbox) if sandbox is not None else existing.sandbox
+                if expected_sandbox != existing.sandbox:
+                    raise CodexRuntimeError(
+                        "runtime_metadata_mismatch",
+                        "The supplied sandbox does not match the persisted runtime binding.",
+                        details={"runtime_id": existing.runtime_id, "expected_sandbox": existing.sandbox},
+                    )
+            else:
+                if cwd is None or sandbox is None:
+                    raise CodexRuntimeError(
+                        "resume_metadata_required",
+                        "Resuming an unbound thread_id requires both cwd and sandbox for binding verification.",
+                    )
+                expected_cwd = self._validate_cwd(cwd)
+                expected_sandbox = validate_sandbox(sandbox)
 
         self._sync_connection_generation()
         reused_connection = (
@@ -256,7 +271,7 @@ class CodexRuntimeManager:
                         sandbox=expected_sandbox,
                     )
                 except AppServerRpcError as exc:
-                    if existing is None or not _is_no_rollout_error(exc):
+                    if not _is_no_rollout_error(exc):
                         raise
                     previous_thread_id = target_thread_id
                     result = self._adapter.thread_start(
