@@ -114,6 +114,10 @@ class ToolContext:
         return self._get("CODEX_COMMAND")
 
     @property
+    def codex_runtime_default_sandbox(self) -> str:
+        return str(self._get("CODEX_RUNTIME_DEFAULT_SANDBOX", "workspace-write"))
+
+    @property
     def pi_command(self) -> str | None:
         return self._get("PI_COMMAND")
 

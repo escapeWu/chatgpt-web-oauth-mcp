@@ -23,7 +23,7 @@ from .errors import (
     AppServerUnavailableError,
     CommandExecutionTimeoutError,
 )
-from .models import SandboxMode, sandbox_policy
+from .models import SandboxMode, sandbox_policy, thread_sandbox
 
 
 DEFAULT_STARTUP_TIMEOUT_SECONDS = 15.0
@@ -178,7 +178,7 @@ class CodexAppServerAdapter:
             "thread/start",
             {
                 "cwd": cwd,
-                "sandbox": sandbox,
+                "sandbox": thread_sandbox(sandbox),
                 "approvalPolicy": "on-request",
             },
             timeout_seconds=self._startup_timeout_seconds,
@@ -198,7 +198,7 @@ class CodexAppServerAdapter:
             {
                 "threadId": thread_id,
                 "cwd": cwd,
-                "sandbox": sandbox,
+                "sandbox": thread_sandbox(sandbox),
                 "approvalPolicy": "on-request",
             },
             timeout_seconds=self._startup_timeout_seconds,

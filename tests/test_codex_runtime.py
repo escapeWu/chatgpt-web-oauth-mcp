@@ -11,7 +11,13 @@ import pytest
 from chatgpt_web_oauth_mcp.codex_runtime.app_server import CodexAppServerAdapter
 from chatgpt_web_oauth_mcp.codex_runtime.errors import AppServerRpcError
 from chatgpt_web_oauth_mcp.codex_runtime.manager import CodexRuntimeManager
+from chatgpt_web_oauth_mcp.codex_runtime.models import sandbox_policy, thread_sandbox
 from chatgpt_web_oauth_mcp.tools_codex_runtime import _bounded
+
+
+def test_full_access_uses_codex_protocol_names() -> None:
+    assert thread_sandbox("full-access") == "danger-full-access"
+    assert sandbox_policy("full-access") == {"type": "dangerFullAccess"}
 
 
 class FakeAdapter:

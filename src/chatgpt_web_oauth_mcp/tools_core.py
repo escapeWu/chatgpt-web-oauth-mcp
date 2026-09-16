@@ -72,9 +72,12 @@ def register_core_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             "codex_command": ctx.codex_command,
             "pi_command": ctx.pi_command,
             "codex_runtime": (
-                ctx.codex_runtime_manager.info()
+                {
+                    **ctx.codex_runtime_manager.info(),
+                    "default_sandbox": ctx.codex_runtime_default_sandbox,
+                }
                 if ctx.codex_runtime_manager is not None
-                else {"enabled": False}
+                else {"enabled": False, "default_sandbox": ctx.codex_runtime_default_sandbox}
             ),
             "tmux": tmux_runtime_info(
                 binary=ctx.tmux_binary,

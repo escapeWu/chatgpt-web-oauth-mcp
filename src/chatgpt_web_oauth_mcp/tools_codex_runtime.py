@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 from pydantic import Field
 
@@ -25,7 +25,7 @@ def register_codex_runtime_tools(mcp: Any, ctx: ToolContext) -> dict[str, object
         description=(
             "Create a persistent Codex App Server thread for one cwd and sandbox policy. "
             "This starts the runtime thread but never starts a Codex LLM turn. "
-            "The default sandbox is workspace-write; full-access must be explicit."
+            "Omit sandbox to use the server-configured default policy."
         ),
     )
     def codex_runtime_open(
@@ -34,9 +34,9 @@ def register_codex_runtime_tools(mcp: Any, ctx: ToolContext) -> dict[str, object
             Field(description="Directory to bind to this runtime."),
         ],
         sandbox: Annotated[
-            SandboxMode,
-            Field(description="Sandbox policy: read-only, workspace-write, or explicit full-access."),
-        ] = "workspace-write",
+            SandboxMode | None,
+            Field(description="Sandbox policy: read-only, workspace-write, or full-access; omit for server default."),
+        ] = None,
         name: Annotated[
             str | None,
             Field(description="Optional human-readable runtime name."),
@@ -45,10 +45,11 @@ def register_codex_runtime_tools(mcp: Any, ctx: ToolContext) -> dict[str, object
         manager = _manager_or_error(ctx)
         if isinstance(manager, dict):
             return manager
+        effective_sandbox = sandbox or cast(SandboxMode, ctx.codex_runtime_default_sandbox)
         return _invoke(
             lambda: manager.open_runtime(
                 cwd=resolve_cwd(cwd, ctx.workspace_root),
-                sandbox=sandbox,
+                sandbox=effective_sandbox,
                 name=name,
             )
         )
