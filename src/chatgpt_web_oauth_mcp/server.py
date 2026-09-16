@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import asynccontextmanager
 import os
 from typing import Any
 
@@ -12,6 +13,13 @@ from .config import (
     AUTH_MODE,
     AUTH_TOKEN,
     CODEX_COMMAND,
+    CODEX_RUNTIME_DEFAULT_TIMEOUT_MS,
+    CODEX_RUNTIME_MAX_CONCURRENCY,
+    CODEX_RUNTIME_MAX_MESSAGE_BYTES,
+    CODEX_RUNTIME_MAX_RUNTIMES,
+    CODEX_RUNTIME_MAX_TIMEOUT_MS,
+    CODEX_RUNTIME_OUTPUT_MAX_BYTES,
+    CODEX_RUNTIME_STARTUP_TIMEOUT_SECONDS,
     COMMAND_TIMEOUT,
     DEBUG_MCP_LOGGING,
     DELEGATE_CANCEL_GRACE_SECONDS,
@@ -47,12 +55,14 @@ from .config import (
     WORKSPACE_ROOT,
     ensure_runtime_directories,
 )
+from .codex_runtime import CodexRuntimeManager
 from .executors import ExecutorRegistry
 from .http_compat import build_http_compat_app
 from .oauth import OAuthRuntimeConfig
 from .shell import JobRegistry
 from .tool_context import ToolContext
 from .tools_core import register_core_tools
+from .tools_codex_runtime import register_codex_runtime_tools
 from .tools_files import register_file_tools
 from .tools_git_shell import register_git_shell_tools
 from .tools_skills import register_skill_tools
@@ -78,10 +88,34 @@ registry = ExecutorRegistry(
     cancel_grace_seconds=DELEGATE_CANCEL_GRACE_SECONDS,
 )
 job_registry = JobRegistry()
+codex_runtime_manager = CodexRuntimeManager(
+    state_dir=STATE_DIR,
+    codex_command=CODEX_COMMAND,
+    workspace_root=WORKSPACE_ROOT,
+    max_concurrency=CODEX_RUNTIME_MAX_CONCURRENCY,
+    max_runtimes=CODEX_RUNTIME_MAX_RUNTIMES,
+    startup_timeout_seconds=CODEX_RUNTIME_STARTUP_TIMEOUT_SECONDS,
+    default_timeout_ms=CODEX_RUNTIME_DEFAULT_TIMEOUT_MS,
+    max_timeout_ms=CODEX_RUNTIME_MAX_TIMEOUT_MS,
+    output_bytes_cap=CODEX_RUNTIME_OUTPUT_MAX_BYTES,
+    max_message_bytes=CODEX_RUNTIME_MAX_MESSAGE_BYTES,
+)
+
+
+@asynccontextmanager
+async def _mcp_lifespan(_server: Any):
+    try:
+        yield {}
+    finally:
+        codex_runtime_manager.shutdown()
+
 
 MCP_INSTRUCTIONS = (
     "Architecture: ChatGPT Web is the architect/manager/reviewer; this local MCP server exposes "
-    "scoped local tools; delegate_task submits project-scoped CLI-harness readers or writers. Use direct tools first "
+    "scoped local tools; codex_runtime_* provides a persistent Codex App Server runtime, "
+    "uses command/exec for argv execution, and never starts a Codex LLM turn. "
+    "Approval, elicitation, and auth-required requests are surfaced rather than auto-approved. "
+    "delegate_task submits project-scoped CLI-harness readers or writers. Use direct tools first "
     "for repo inspection, planning, patching, short commands, git checks, and verification. "
     "Use search/read_text for focused or batched discovery and reading, apply_patch/write_file for edits, "
     "env_snapshot/env_diff for read-only runtime diagnostics. Before edits or reviews, use "
@@ -117,6 +151,7 @@ MCP_INSTRUCTIONS = (
 mcp = FastMCP(
     APP_NAME,
     instructions=MCP_INSTRUCTIONS,
+    lifespan=_mcp_lifespan,
 )
 
 
@@ -153,6 +188,7 @@ _tool_context = ToolContext(
 
 _tool_exports: dict[str, object] = {}
 _tool_exports.update(register_core_tools(mcp, _tool_context))
+_tool_exports.update(register_codex_runtime_tools(mcp, _tool_context))
 _tool_exports.update(register_skill_tools(mcp))
 _tool_exports.update(register_file_tools(mcp, _tool_context))
 _tool_exports.update(register_git_shell_tools(mcp, _tool_context))

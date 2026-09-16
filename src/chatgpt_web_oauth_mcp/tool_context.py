@@ -138,5 +138,9 @@ class ToolContext:
         return self._get("registry")
 
     @property
+    def codex_runtime_manager(self) -> Any:
+        return self._get("codex_runtime_manager")
+
+    @property
     def job_registry(self) -> Any:
         return self._get("job_registry")
