@@ -71,6 +71,11 @@ def register_core_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             "debug_mcp_logging": ctx.debug_mcp_logging,
             "codex_command": ctx.codex_command,
             "pi_command": ctx.pi_command,
+            "codex_runtime": (
+                ctx.codex_runtime_manager.info()
+                if ctx.codex_runtime_manager is not None
+                else {"enabled": False}
+            ),
             "tmux": tmux_runtime_info(
                 binary=ctx.tmux_binary,
                 socket_name=ctx.tmux_socket_name,

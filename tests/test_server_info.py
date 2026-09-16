@@ -20,6 +20,11 @@ def test_server_info_reports_metadata_and_tools() -> None:
     assert payload["command_timeout_seconds"] >= 1
     assert payload["delegate_timeout_seconds"] >= 1
     assert payload["delegate_wait_timeout_seconds"] >= 1
+    runtime_info = payload["codex_runtime"]
+    assert runtime_info["enabled"] is True
+    assert runtime_info["process_status"] == "stopped"
+    assert runtime_info["runtime_count"] >= 0
+    assert runtime_info["binding_store"]["available"] is True
     delegate_mode = payload["delegate_mode"]
     assert delegate_mode["executor"] == "codex"
     assert delegate_mode["default_harness"] == "codex"
@@ -77,6 +82,13 @@ def test_server_info_reports_metadata_and_tools() -> None:
     # Spot-check a handful of must-have tools from each module.
     for name in [
         "server_info",
+        "codex_runtime_open",
+        "codex_runtime_resume",
+        "codex_runtime_status",
+        "codex_runtime_close",
+        "codex_exec",
+        "codex_mcp_inventory",
+        "codex_mcp_call",
         "env_snapshot",
         "env_diff",
         "search",
