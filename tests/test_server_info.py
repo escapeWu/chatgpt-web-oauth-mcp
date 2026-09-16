@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
+from chatgpt_web_oauth_mcp import config, server
 from chatgpt_web_oauth_mcp.server import server_info
 
 
@@ -11,6 +12,7 @@ def _call() -> dict:
 
 
 def test_server_info_reports_metadata_and_tools() -> None:
+    assert server._tool_context.codex_runtime_default_sandbox == config.CODEX_RUNTIME_DEFAULT_SANDBOX
     payload = _call()
     assert payload["success"] is True
     assert payload["app_name"] == "chatgpt-web-oauth-mcp"
@@ -25,7 +27,7 @@ def test_server_info_reports_metadata_and_tools() -> None:
     assert runtime_info["process_status"] == "stopped"
     assert runtime_info["runtime_count"] >= 0
     assert runtime_info["binding_store"]["available"] is True
-    assert runtime_info["default_sandbox"] == "workspace-write"
+    assert runtime_info["default_sandbox"] == config.CODEX_RUNTIME_DEFAULT_SANDBOX
     delegate_mode = payload["delegate_mode"]
     assert delegate_mode["executor"] == "codex"
     assert delegate_mode["default_harness"] == "codex"
