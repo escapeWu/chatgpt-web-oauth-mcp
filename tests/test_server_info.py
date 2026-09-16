@@ -25,6 +25,7 @@ def test_server_info_reports_metadata_and_tools() -> None:
     assert runtime_info["process_status"] == "stopped"
     assert runtime_info["runtime_count"] >= 0
     assert runtime_info["binding_store"]["available"] is True
+    assert runtime_info["default_sandbox"] == "workspace-write"
     delegate_mode = payload["delegate_mode"]
     assert delegate_mode["executor"] == "codex"
     assert delegate_mode["default_harness"] == "codex"

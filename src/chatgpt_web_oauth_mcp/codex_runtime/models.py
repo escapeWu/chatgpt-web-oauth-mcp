@@ -12,6 +12,11 @@ _SANDBOX_POLICY_TYPES = {
     "workspace-write": "workspaceWrite",
     "full-access": "dangerFullAccess",
 }
+_THREAD_SANDBOX_MODES = {
+    "read-only": "read-only",
+    "workspace-write": "workspace-write",
+    "full-access": "danger-full-access",
+}
 _RUNTIME_STATUSES = {"ready", "detached", "error"}
 
 
@@ -29,6 +34,11 @@ def sandbox_policy(mode: SandboxMode) -> dict[str, object]:
     if mode == "workspace-write":
         return {"type": policy_type, "networkAccess": False}
     return {"type": policy_type}
+
+
+def thread_sandbox(mode: SandboxMode) -> str:
+    """Translate the public runtime sandbox name to Codex thread/start syntax."""
+    return _THREAD_SANDBOX_MODES[mode]
 
 
 def sandbox_matches(mode: SandboxMode, value: object) -> bool:

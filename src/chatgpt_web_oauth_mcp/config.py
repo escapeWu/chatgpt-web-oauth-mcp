@@ -26,6 +26,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from .codex_runtime.models import SandboxMode, validate_sandbox
 from .response_budget import DEFAULT_TOOL_OUTPUT_TOKEN_BUDGET, resolve_token_budget
 
 
@@ -72,6 +73,9 @@ OAUTH_SCOPES = tuple(
 )
 OAUTH_TOKEN_TTL_SECONDS = int(os.environ.get("CHATGPT_MCP_OAUTH_TOKEN_TTL_SECONDS", "86400"))
 CODEX_COMMAND = os.environ.get("CHATGPT_MCP_CODEX_COMMAND", "codex").strip()
+CODEX_RUNTIME_DEFAULT_SANDBOX: SandboxMode = validate_sandbox(
+    os.environ.get("CHATGPT_MCP_CODEX_RUNTIME_DEFAULT_SANDBOX", "workspace-write").strip().lower()
+)
 CODEX_RUNTIME_MAX_CONCURRENCY = _positive_env_int(
     "CHATGPT_MCP_CODEX_RUNTIME_MAX_CONCURRENCY",
     4,
