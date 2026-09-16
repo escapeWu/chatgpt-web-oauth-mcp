@@ -82,6 +82,7 @@ class CodexAppServerAdapter:
         self._reader_thread: threading.Thread | None = None
         self._stderr_thread: threading.Thread | None = None
         self._started = False
+        self._connection_generation = 0
         self._capabilities: set[str] = set()
         self._stderr_tail: deque[str] = deque(maxlen=8)
 
@@ -96,6 +97,10 @@ class CodexAppServerAdapter:
     def is_running(self) -> bool:
         process = self._process
         return bool(process is not None and process.poll() is None and self._started)
+
+    @property
+    def connection_generation(self) -> int:
+        return self._connection_generation
 
     def info(self) -> dict[str, object]:
         return {
@@ -158,6 +163,7 @@ class CodexAppServerAdapter:
                 self._send_notification("initialized", {})
                 self._probe_capabilities()
                 self._started = True
+                self._connection_generation += 1
             except Exception:
                 self._close_process_locked()
                 raise

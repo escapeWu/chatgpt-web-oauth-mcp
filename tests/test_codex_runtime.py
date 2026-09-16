@@ -9,7 +9,9 @@ import textwrap
 import pytest
 
 from chatgpt_web_oauth_mcp.codex_runtime.app_server import CodexAppServerAdapter
+from chatgpt_web_oauth_mcp.codex_runtime.errors import AppServerRpcError
 from chatgpt_web_oauth_mcp.codex_runtime.manager import CodexRuntimeManager
+from chatgpt_web_oauth_mcp.tools_codex_runtime import _bounded
 
 
 class FakeAdapter:
@@ -17,6 +19,7 @@ class FakeAdapter:
         self.running = False
         self.calls: list[tuple[str, dict[str, object]]] = []
         self.thread_number = 0
+        self.connection_generation = 0
 
     def info(self) -> dict[str, object]:
         return {
@@ -37,6 +40,8 @@ class FakeAdapter:
         return self.running
 
     def thread_start(self, *, cwd: str, sandbox: str) -> dict[str, object]:
+        if not self.running:
+            self.connection_generation += 1
         self.running = True
         self.thread_number += 1
         thread_id = f"thread-{self.thread_number}"
@@ -102,7 +107,6 @@ class FakeAdapter:
             "_meta": meta,
         }
 
-    def shutdown(self) -> None:
         self.running = False
 
 
@@ -144,6 +148,97 @@ def test_runtime_bindings_persist_and_resume_after_manager_restart(tmp_path: Pat
     assert resumed["status"] == "ready"
     assert resumed["thread_id"] == opened["thread_id"]
     assert [name for name, _ in second_adapter.calls] == ["thread/resume"]
+
+
+def test_close_preserves_runtime_id_and_reattaches_live_thread(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    adapter = FakeAdapter()
+    manager = _manager(tmp_path, adapter)
+    opened = manager.open_runtime(cwd=project, sandbox="workspace-write", name="project")
+    runtime_id = str(opened["runtime_id"])
+    thread_id = str(opened["thread_id"])
+
+    closed = manager.close_runtime(runtime_id)
+    assert closed["status"] == "detached"
+    assert closed["binding_preserved"] is True
+    assert closed["thread_id"] == thread_id
+
+    resumed = manager.resume_runtime(
+        runtime_id=runtime_id,
+        thread_id=None,
+        cwd=None,
+        sandbox=None,
+    )
+    assert resumed["runtime_id"] == runtime_id
+    assert resumed["thread_id"] == thread_id
+    assert resumed["resume_mode"] == "reattached"
+    assert [name for name, _ in adapter.calls].count("thread/resume") == 0
+
+
+def test_resume_recreates_harness_only_thread_after_no_rollout(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    first_adapter = FakeAdapter()
+    first_manager = _manager(tmp_path, first_adapter)
+    opened = first_manager.open_runtime(cwd=project, sandbox="workspace-write", name=None)
+    runtime_id = str(opened["runtime_id"])
+    previous_thread_id = str(opened["thread_id"])
+
+    class NoRolloutAdapter(FakeAdapter):
+        def __init__(self) -> None:
+            super().__init__()
+            self.thread_number = 10
+
+        def thread_resume(self, *, thread_id: str, cwd: str, sandbox: str) -> dict[str, object]:
+            self.running = True
+            self.calls.append(("thread/resume", {"thread_id": thread_id, "cwd": cwd, "sandbox": sandbox}))
+            raise AppServerRpcError(
+                "thread/resume",
+                -32600,
+                f"no rollout found for thread id {thread_id}",
+            )
+
+    second_adapter = NoRolloutAdapter()
+    second_manager = _manager(tmp_path, second_adapter)
+    resumed = second_manager.resume_runtime(
+        runtime_id=runtime_id,
+        thread_id=None,
+        cwd=None,
+        sandbox=None,
+    )
+    assert resumed["runtime_id"] == runtime_id
+    assert resumed["thread_id"] != previous_thread_id
+    assert resumed["resume_mode"] == "recreated"
+    assert resumed["thread_recreated"] is True
+    assert resumed["previous_thread_id"] == previous_thread_id
+
+
+def test_inventory_budget_preserves_server_identity_and_tool_keys() -> None:
+    payload = {
+        "success": True,
+        "servers": [
+            {
+                "server": "github",
+                "name": "github",
+                "authStatus": "authenticated",
+                "runtimeStatus": "ready",
+                "tools": {
+                    "github.search": {
+                        "name": "github.search",
+                        "description": "search details " * 200,
+                    }
+                },
+                "resources": [{"uri": "resource:" + ("x" * 1000)} for _ in range(8)],
+            }
+        ],
+    }
+    result = _bounded(payload, 500, fields=("servers",))
+    server = result["servers"][0]
+    assert server["server"] == "github"
+    assert server["name"] == "github"
+    assert "github.search" in server["tools"]
+    assert result["truncated"] is True
 
 
 def test_runtime_exec_inventory_and_mcp_call_remain_bound_to_runtime(tmp_path: Path) -> None:

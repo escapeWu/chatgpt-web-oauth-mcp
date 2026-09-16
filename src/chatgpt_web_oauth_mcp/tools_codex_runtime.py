@@ -60,6 +60,8 @@ def register_codex_runtime_tools(mcp: Any, ctx: ToolContext) -> dict[str, object
         description=(
             "Resume a persisted Codex runtime by runtime_id, or bind an explicit thread_id. "
             "A runtime_id uses its persisted cwd and sandbox and rejects mismatches. "
+            "When the original thread has no rollout, the runtime_id is retained and a "
+            "same-policy replacement thread is created explicitly in the result. "
             "An unknown thread_id requires cwd and sandbox so the project binding is verified."
         ),
     )
@@ -116,8 +118,9 @@ def register_codex_runtime_tools(mcp: Any, ctx: ToolContext) -> dict[str, object
         title="Close Codex Runtime",
         annotations=LOCAL_STATE_TOOL,
         description=(
-            "Remove the local runtime binding while preserving the Codex thread. "
-            "This is detach-only: it does not call thread/delete or thread/archive."
+            "Mark a local Codex runtime binding detached while preserving its runtime_id and Codex thread. "
+            "This is detach-only: it does not call thread/delete or thread/archive, and the same runtime_id "
+            "can be resumed later."
         ),
     )
     def codex_runtime_close(
@@ -325,7 +328,11 @@ def _bounded(
         candidate = dict(payload)
         for field in fields:
             if field in candidate:
-                candidate[field] = _scale_value(candidate[field], fraction)
+                candidate[field] = (
+                    _scale_inventory(candidate[field], fraction)
+                    if field == "servers"
+                    else _scale_value(candidate[field], fraction)
+                )
         candidate["truncated_fields"] = list(fields)
         result, result_measurement = with_budget_metadata(
             candidate,
@@ -336,6 +343,49 @@ def _bounded(
         if result_measurement.fits:
             return result
     return complete
+
+
+def _scale_inventory(value: Any, fraction: float) -> list[Any]:
+    if not isinstance(value, list):
+        return []
+    if fraction >= 1:
+        return value
+    keep = int(len(value) * fraction)
+    if fraction > 0 and keep == 0 and value:
+        keep = 1
+    scaled_servers: list[Any] = []
+    for server in value[:keep]:
+        if not isinstance(server, dict):
+            scaled_servers.append(server)
+            continue
+        scaled: dict[Any, Any] = {}
+        for key, item in server.items():
+            # Server identity and tool names are used as the next call's
+            # arguments, so budget reduction must never corrupt them.
+            if key in {"server", "name", "authStatus", "runtimeStatus"}:
+                scaled[key] = item
+            elif key == "tools" and isinstance(item, dict):
+                scaled[key] = _scale_inventory_tools(item, fraction)
+            else:
+                scaled[key] = _scale_value(item, fraction)
+        scaled_servers.append(scaled)
+    return scaled_servers
+
+
+def _scale_inventory_tools(value: dict[Any, Any], fraction: float) -> dict[Any, Any]:
+    scaled_tools: dict[Any, Any] = {}
+    for tool_name, tool in value.items():
+        if not isinstance(tool, dict):
+            scaled_tools[tool_name] = tool
+            continue
+        scaled_tool: dict[Any, Any] = {}
+        for key, item in tool.items():
+            if key == "name":
+                scaled_tool[key] = item
+            else:
+                scaled_tool[key] = _scale_value(item, fraction)
+        scaled_tools[tool_name] = scaled_tool
+    return scaled_tools
 
 
 def _scale_value(value: Any, fraction: float) -> Any:

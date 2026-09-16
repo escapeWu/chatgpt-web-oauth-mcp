@@ -10,9 +10,8 @@ from typing import Any
 
 from .app_server import CodexAppServerAdapter
 from .bindings import BindingStore
-from .errors import BindingStoreError, CodexRuntimeError
+from .errors import AppServerRpcError, BindingStoreError, CodexRuntimeError
 from .models import (
-    SANDBOX_MODES,
     RuntimeBinding,
     SandboxMode,
     new_runtime_id,
@@ -79,6 +78,12 @@ class CodexRuntimeManager:
             cwd=workspace_root,
             startup_timeout_seconds=self.startup_timeout_seconds,
             max_message_bytes=max_message_bytes,
+        )
+        self._live_thread_ids: set[str] = set()
+        self._observed_connection_generation = getattr(
+            self._adapter,
+            "connection_generation",
+            None,
         )
 
     @property
@@ -166,6 +171,8 @@ class CodexRuntimeManager:
             exc.side_effects["thread_created"] = True
             exc.side_effects["thread_id"] = thread_id
             raise
+        self._sync_connection_generation()
+        self._live_thread_ids.add(thread_id)
         return {"success": True, **runtime_public_dict(binding)}
 
     def resume_runtime(
@@ -228,24 +235,50 @@ class CodexRuntimeManager:
                         "The supplied thread_id is already bound to a runtime.",
                     )
 
-        with self._request_slot():
-            result = self._adapter.thread_resume(
-                thread_id=target_thread_id,
-                cwd=str(expected_cwd),
-                sandbox=expected_sandbox,
-            )
-        resumed_thread_id, returned_cwd, _returned_sandbox = self._verify_thread_metadata(
-            result,
-            expected_cwd=expected_cwd,
-            expected_sandbox=expected_sandbox,
-            method="thread/resume",
+        self._sync_connection_generation()
+        reused_connection = (
+            existing is not None
+            and self._adapter.is_running()
+            and target_thread_id in self._live_thread_ids
         )
-        if resumed_thread_id != target_thread_id:
+        requested_thread_id = target_thread_id
+        thread_recreated = False
+        previous_thread_id: str | None = None
+        if reused_connection:
+            resumed_thread_id = target_thread_id
+            returned_cwd = expected_cwd
+        else:
+            with self._request_slot():
+                try:
+                    result = self._adapter.thread_resume(
+                        thread_id=target_thread_id,
+                        cwd=str(expected_cwd),
+                        sandbox=expected_sandbox,
+                    )
+                except AppServerRpcError as exc:
+                    if existing is None or not _is_no_rollout_error(exc):
+                        raise
+                    previous_thread_id = target_thread_id
+                    result = self._adapter.thread_start(
+                        cwd=str(expected_cwd),
+                        sandbox=expected_sandbox,
+                    )
+                    thread_recreated = True
+            resumed_thread_id, returned_cwd, _returned_sandbox = self._verify_thread_metadata(
+                result,
+                expected_cwd=expected_cwd,
+                expected_sandbox=expected_sandbox,
+                method="thread/start" if thread_recreated else "thread/resume",
+            )
+        if not thread_recreated and resumed_thread_id != requested_thread_id:
             raise CodexRuntimeError(
                 "runtime_metadata_mismatch",
                 "Codex resumed a different thread_id than requested.",
-                details={"requested_thread_id": target_thread_id, "returned_thread_id": resumed_thread_id},
+                details={"requested_thread_id": requested_thread_id, "returned_thread_id": resumed_thread_id},
             )
+        if thread_recreated:
+            target_thread_id = resumed_thread_id
+        self._sync_connection_generation()
         now = time.time()
         if existing is None:
             binding = RuntimeBinding(
@@ -261,6 +294,7 @@ class CodexRuntimeManager:
         else:
             binding = replace(
                 existing,
+                thread_id=target_thread_id,
                 cwd=str(returned_cwd),
                 last_used_at=now,
                 status="ready",
@@ -281,7 +315,17 @@ class CodexRuntimeManager:
             exc.side_effects["thread_resumed"] = True
             exc.side_effects["thread_id"] = target_thread_id
             raise
-        return {"success": True, **runtime_public_dict(binding)}
+        self._sync_connection_generation()
+        if previous_thread_id is not None:
+            self._live_thread_ids.discard(previous_thread_id)
+        self._live_thread_ids.add(binding.thread_id)
+        payload: dict[str, object] = {"success": True, **runtime_public_dict(binding)}
+        payload["resume_mode"] = "reattached" if reused_connection else "resumed"
+        if thread_recreated:
+            payload["resume_mode"] = "recreated"
+            payload["thread_recreated"] = True
+            payload["previous_thread_id"] = previous_thread_id
+        return payload
 
     def runtime_status(self, runtime_id: str) -> dict[str, object]:
         self._ensure_store()
@@ -308,15 +352,15 @@ class CodexRuntimeManager:
             binding = self._bindings.get(runtime_id)
             if binding is None:
                 raise CodexRuntimeError("runtime_not_found", f"Unknown runtime_id: {runtime_id}.")
+            detached_binding = replace(binding, status="detached", last_used_at=time.time())
             updated = dict(self._bindings)
-            del updated[runtime_id]
+            updated[runtime_id] = detached_binding
             self._save_bindings(updated)
         return {
             "success": True,
-            "runtime_id": runtime_id,
-            "thread_id": binding.thread_id,
-            "status": "closed",
+            **runtime_public_dict(detached_binding),
             "preserved_thread": True,
+            "binding_preserved": True,
             "destructive_action": False,
         }
 
@@ -491,11 +535,21 @@ class CodexRuntimeManager:
         with self._lock:
             for runtime_id, binding in list(self._bindings.items()):
                 self._bindings[runtime_id] = replace(binding, status="detached")
+            self._live_thread_ids.clear()
         self._adapter.shutdown()
 
     def _ensure_store(self) -> None:
         if self._load_error is not None:
             raise self._load_error
+
+    def _sync_connection_generation(self) -> None:
+        generation = getattr(self._adapter, "connection_generation", None)
+        if generation is None:
+            return
+        with self._lock:
+            if generation != self._observed_connection_generation:
+                self._live_thread_ids.clear()
+                self._observed_connection_generation = generation
 
     @contextmanager
     def _request_slot(self):
@@ -680,3 +734,8 @@ class CodexRuntimeManager:
                 details={"expected_sandbox": expected_sandbox},
             )
         return thread_id.strip(), returned_cwd, returned_sandbox
+
+
+def _is_no_rollout_error(error: AppServerRpcError) -> bool:
+    message = error.message.casefold()
+    return "no rollout found" in message or "no rollout" in message
