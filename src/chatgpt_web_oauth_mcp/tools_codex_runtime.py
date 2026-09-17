@@ -133,45 +133,6 @@ def register_codex_runtime_tools(mcp: Any, ctx: ToolContext) -> dict[str, object
         return _invoke(lambda: manager.close_runtime(runtime_id))
 
     @mcp.tool(
-        name="codex_exec",
-        title="Execute In Codex Runtime",
-        annotations=OPEN_WORLD_WRITE_TOOL,
-        description=(
-            "Run an argv list through Codex App Server command/exec using the selected runtime's "
-            "sandbox policy. Outputs are bounded, timeout is bounded, and timeout termination is "
-            "attempted with command/exec/terminate. This never uses thread/shellCommand or a shell string."
-        ),
-    )
-    def codex_exec(
-        runtime_id: Annotated[str, Field(description="Runtime identity that owns the sandbox and cwd.")],
-        command: Annotated[
-            list[str],
-            Field(min_length=1, max_length=128, description="Non-empty argv vector; shell syntax is not evaluated."),
-        ],
-        timeout_ms: Annotated[
-            int | None,
-            Field(ge=1, description="Optional bounded command timeout in milliseconds."),
-        ] = None,
-        cwd: Annotated[
-            str | None,
-            Field(description="Optional descendant of the runtime cwd."),
-        ] = None,
-    ) -> dict[str, object]:
-        manager = _manager_or_error(ctx)
-        if isinstance(manager, dict):
-            return manager
-        resolved_cwd = resolve_cwd(cwd, ctx.workspace_root) if cwd else None
-        payload = _invoke(
-            lambda: manager.exec_command(
-                runtime_id=runtime_id,
-                command=command,
-                timeout_ms=timeout_ms,
-                cwd=resolved_cwd,
-            )
-        )
-        return _bounded(payload, ctx.tool_output_token_budget, fields=("stdout", "stderr"))
-
-    @mcp.tool(
         name="codex_mcp_inventory",
         title="List Codex MCP Tools",
         annotations=READ_ONLY_TOOL,
@@ -256,7 +217,6 @@ def register_codex_runtime_tools(mcp: Any, ctx: ToolContext) -> dict[str, object
         "codex_runtime_resume": codex_runtime_resume,
         "codex_runtime_status": codex_runtime_status,
         "codex_runtime_close": codex_runtime_close,
-        "codex_exec": codex_exec,
         "codex_mcp_inventory": codex_mcp_inventory,
         "codex_mcp_call": codex_mcp_call,
     }

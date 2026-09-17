@@ -6,7 +6,7 @@
 
 一个本地 [FastMCP](https://github.com/jlowin/fastmcp) 服务器，让 **ChatGPT Web** 通过受 OAuth 保护的远程 HTTPS MCP endpoint，调用你电脑上的可信工具。
 
-它提供有界的文件与代码搜索、结构化 Git 操作、短命令执行、持久后台任务、tmux 交互会话和项目级 CLI Agent 委派，同时让 ChatGPT Web 保持 architect / manager / reviewer 的角色。
+它提供有界的文件与代码搜索、结构化 Git 操作、短命令执行、持久后台任务、tmux 交互会话，以及持久 Codex runtime/MCP 访问，同时让 ChatGPT Web 保持 architect / manager / reviewer 的角色。
 
 ## 为什么需要这个项目
 
@@ -18,7 +18,7 @@ ChatGPT 无法直接连接只监听 `127.0.0.1` 的本地进程。一个自定�
 - 与 ChatGPT 兼容的 OAuth discovery、dynamic client registration、PKCE 和 bearer token 校验；
 - 可选的 Cloudflare Tunnel 与 macOS `launchd` 辅助脚本；
 - 带明确分页、token budget 和输出边界的本地操作工具；
-- 将短命令、持久任务、交互终端和委派编码拆成不同执行通道。
+- 将短命令、持久任务、交互终端和持久 Codex runtime/MCP 访问拆成不同执行通道。
 
 ## 架构
 
@@ -42,10 +42,12 @@ ChatGPT Web
     │   ├── job_*           持久、非交互后台任务
     │   └── tmux_*          持久交互式 TTY 会话
     │
-    └── delegate_task       单个有界 Codex、Pi 或自定义 CLI harness 执行切片
+    └── Codex runtime
+        ├── codex_runtime_* 持久 runtime 绑定
+        └── codex_mcp_*     已连接 MCP inventory/call
 ```
 
-ChatGPT Web 应先通过直接工具检查上下文、形成计划、在合适时完成小范围编辑，并自行验证结果。`delegate_task` 刻意不被设计成通用 Agent Loop：它每次只通过所选 CLI harness 执行一个边界清楚的任务，并返回可审计的状态和日志路径。
+ChatGPT Web 通过直接 MCP tools 完成检查、规划、编辑和验证。持久 Codex 访问由 `codex_runtime_*` 与 `codex_mcp_*` 提供；这些 runtime tools 本身不会启动 Codex LLM turn。
 
 ## 核心能力
 
@@ -58,7 +60,7 @@ ChatGPT Web 应先通过直接工具检查上下文、形成计划、在合适�
 | 机械式安全编辑 | 完整文件写入、结构化 patch、带 CAS 保护和原子写入的批量替换 |
 | Git | status、diff、commit、log、show、blame，以及精简 worktree 生命周期 |
 | 本地执行 | 有界命令、持久后台 job、持久 tmux 会话 |
-| CLI Agent 委派 | 可插拔 Codex/Pi harness、模型与 reasoning 覆盖、公平读写调度、长轮询、私有审计日志 |
+| Codex runtime | 持久 Codex App Server 绑定，以及已连接 MCP 的 inventory/call |
 | macOS 运维 | 开发隧道、持久 launchd 安装、状态、doctor、reload、restart 和卸载脚本 |
 
 ## 运行模型
@@ -66,34 +68,10 @@ ChatGPT Web 应先通过直接工具检查上下文、形成计划、在合适�
 始终选择最窄、最匹配当前任务的工具：
 
 1. 使用 `list_files`、`search`、`read_text`、`read`、`code_map_*`、`git_status` 或 `git_diff` 检查上下文。
-2. 使用 `apply_patch`、`replace`、`write_file` 或结构化 Git 工具完成确定性小改动。
-3. 直接验证结果。
-4. 只有当一个边界明确的实现任务确实适合本地 CLI Agent 时，才调用 `delegate_task`。
-
-一个好的委派请求应包含：
-
-- 单一且明确的 task 或 goal；
-- 收窄后的 `cwd` 和 `files_in_scope`；
-- 明确的 `out_of_scope`；
-- acceptance criteria 与 `done_means`；
-- verification commands；
-- 明确选择的 `commit_mode`。
-
-CLI Agent 委派采用与 harness 无关的项目级公平读写调度。同一项目内，多个 `kind=explore` reader 可以并发；`kind=code` writer 独占且按 FIFO 排队。一旦 writer 已排队，后来提交的 reader 不得越过它。共享同一 Git common directory 的 worktree 会被识别为同一项目；不同项目独立调度，但仍受可配置全局安全上限保护。
-
-可显式选择 `harness=codex` 或 `harness=pi`；省略时使用 `CHATGPT_MCP_DELEGATE_DEFAULT_HARNESS`（默认 `codex`）。Codex explore 使用 `codex exec --sandbox read-only --ephemeral`。Pi explore 会关闭 session、项目 trust/context、extensions 和 Pi 本地 skills，并把工具限制为 `read,grep,find,ls`。所有 explore 都强制 `commit_mode=forbidden`，并执行运行前后 Git status 防御性审计。Pi code 以非交互方式启用项目 trust 和正常 Pi 工具集。使用 `delegate_batch` 做只读 fan-out/fan-in，使用 `delegate_status` 监控 task/group/project，使用 `delegate_cancel` 终止 task 或 group。
-
-每次委派都会在系统临时缓存目录中生成私有审计目录：
-
-```text
-chatgpt-web-oauth-mcp/<harness>-delegates/<timestamp>-<delegate_id>/
-├── prompt.txt
-├── stdout.log
-├── stderr.log
-└── metadata.json
-```
-
-已完成的 `delegate_task` 响应不会内联原始 stdout/stderr。需要查看原始输出时，应读取返回的日志路径。
+2. 使用 `apply_patch`、`replace`、`write_file` 或结构化 Git 工具完成确定性修改。
+3. 根据进程生命周期和交互需求选择 `run_command`、`job_*` 或 `tmux_*`。
+4. 需要持久 Codex runtime 或已连接 MCP 访问时，使用 `codex_runtime_*` 和 `codex_mcp_*`。
+5. 在宣布完成前直接验证结果。
 
 ## 依赖要求
 
@@ -101,7 +79,7 @@ chatgpt-web-oauth-mcp/<harness>-delegates/<timestamp>-<delegate_id>/
 - Git
 - `ripgrep`，作为首选搜索后端
 - `tmux`，用于持久交互式会话
-- Codex CLI 和/或 Pi coding agent CLI，用于 `delegate_task`
+- 使用持久 Codex runtime 集成时需要 Codex CLI
 - 只有使用内置 tunnel helper 时才需要 `cloudflared`
 - 只有内置 `launchd` 脚本依赖 macOS；Python server 本身并不绑定 launchd
 
@@ -256,7 +234,6 @@ watchdog 负责检查服务健康状态。doctor 脚本会按照失败阈值和�
 | --- | --- |
 | `server_info` | 检查运行时配置和已注册 MCP tools |
 | `get_skill_index` | 发现 progressive-disclosure 操作指南及其触发条件 |
-| `get_delegate_use` | 在使用 delegate tools 前加载完整委派操作契约 |
 | `get_file_use` | 加载文件发现、读取、code-map、编辑、编码、分页与 CAS 契约 |
 | `get_process_use` | 加载 command/job/tmux 的选择与生命周期契约 |
 | `get_git_use` | 加载 repository、commit、history 与 worktree 安全契约 |
@@ -318,32 +295,20 @@ watchdog 负责检查服务健康状态。doctor 脚本会按照失败阈值和�
 
 `tmux_capture` 不是无损应用日志。全屏 TUI、进度条、回车覆盖更新和 tmux history limit 都会影响可见内容。需要保留终端历史时，优先使用应用日志，或使用类似 `--no-alt-screen` 的模式。
 
-### CLI Agent 委派
+### 操作指南
 
-| Tool | 用途 |
-| --- | --- |
-| `delegate_task` | 通过所选 harness 提交一个只读 explore reader 或独占 code writer |
-| `delegate_batch` | 通过同一 harness 并发派发只读探索任务，并在 group barrier 聚合 |
-| `delegate_status` | 监控 delegate、group、project 或全局近期状态 |
-| `delegate_cancel` | 取消一个 delegate 或一个探索 group 的全部 children |
-
-先调用 `get_skill_index` 发现指南，然后在某个工具族的第一次工作流前加载对应指南：`get_file_use`、`get_process_use`、`get_git_use` 或 `get_delegate_use`。这与 Figma 的“工具 + skill”机制一致：单个 tool schema 描述参数，guide 则承载跨工具工作流、安全、生命周期、监控和错误恢复规则。
+先调用 `get_skill_index` 发现指南，然后在某个工具族的第一次工作流前加载对应指南：`get_file_use`、`get_process_use` 或 `get_git_use`。
 
 同一份权威内容也通过标准 MCP resources 暴露：
 
 | Resource | 用途 |
 | --- | --- |
 | `skill://chatgpt-web-oauth-mcp/index` | 机器可读的 guide 索引、触发条件和 tool/resource 路由 |
-| `skill://chatgpt-web-oauth-mcp/delegate-use` | 完整 Markdown 委派指南 |
 | `skill://chatgpt-web-oauth-mcp/file-use` | 完整 Markdown 文件工作流指南 |
 | `skill://chatgpt-web-oauth-mcp/process-use` | 完整 Markdown command、job 与 tmux 指南 |
 | `skill://chatgpt-web-oauth-mcp/git-use` | 完整 Markdown Git 与 worktree 指南 |
 
-同时暴露 tools 与 resources 是有意设计：原生 MCP client 可以使用 `resources/list`、`resources/read`；Pi 等 gateway 即使只稳定呈现 tools，也能调用 `get_skill_index` 和对应的 `get_*_use`。每份指南在 server package 中只有一个来源，避免 filesystem 副本漂移。Pi explore 的 `--no-skills` 仅关闭被委派子进程内的 Pi 本地 skill 注入，不会关闭管理 Agent 使用的这些 MCP guidance endpoints。
-
-调度器和进程运行器只依赖 `DelegateHarness` adapter 协议。Codex 与 Pi 是内置 adapter；其他从 stdin 接收 prompt 的 agent 可以通过 `GenericCliHarness` 以编程方式注册，并分别配置 code/read-only 命令以及 model/reasoning 参数模板。自定义 harness 必须显式提供 read-only 命令后才能接受 `kind=explore`；仅靠 prompt 中的只读声明不会获得该能力。
-
-等待窗口与进程执行上限相互独立。等待到期时返回 `status=queued` 或 `status=running`，不会终止进程；每种任务的 execution timeout 则是硬上限，服务端先向进程组发送 `SIGTERM`，等待 cancel grace 后再发送 `SIGKILL`。Explore 默认 `gpt-5.6-luna + low`，硬上限 900 秒；code 默认 `gpt-5.6-sol + xhigh`，硬上限 3600 秒。
+同时暴露 tools 与 resources，客户端可以选择自己支持的 discovery surface。
 
 ## 如何选择执行工具
 
@@ -352,7 +317,6 @@ watchdog 负责检查服务健康状态。doctor 脚本会按照失败阈值和�
 | 短时、有界、非交互命令 | `run_command` | 长期 daemon 或交互式 TUI |
 | 带可检查日志的持久非交互进程 | `job_*` | 需要交互输入的程序 |
 | 持久交互终端或可人工 attach 的 session | `tmux_*` | 无损 stdout/stderr 采集 |
-| 委派给已配置 CLI Agent 的边界明确任务 | `delegate_task` | 泛化规划、多个无关任务或无限自主执行 |
 
 ## 输出 budget 与分页
 
@@ -394,19 +358,7 @@ Token-aware 只读响应使用 `o200k_base` 编码，并提供统一结果协议
 | `CHATGPT_MCP_RUN_CAPTURE_MAX_BYTES` | 否 | `1048576` bytes |
 | `CHATGPT_MCP_CODEX_COMMAND` | 否 | `codex` |
 | `CHATGPT_MCP_PI_COMMAND` | 否 | `pi` |
-| `CHATGPT_MCP_DELEGATE_DEFAULT_HARNESS` | 否 | `codex`；内置可选值为 `codex`、`pi` |
 | `CHATGPT_MCP_COMMAND_TIMEOUT` | 否 | `120` 秒 |
-| `CHATGPT_MCP_DELEGATE_TIMEOUT` | 否 | `300` 秒；等待窗口兼容回退值 |
-| `CHATGPT_MCP_DELEGATE_WAIT_TIMEOUT` | 否 | `300` 秒 |
-| `CHATGPT_MCP_DELEGATE_EXPLORE_EXECUTION_TIMEOUT` | 否 | `900` 秒，每个 explore 的硬上限 |
-| `CHATGPT_MCP_DELEGATE_CODE_EXECUTION_TIMEOUT` | 否 | `3600` 秒，每个 code 的硬上限 |
-| `CHATGPT_MCP_DELEGATE_CANCEL_GRACE_SECONDS` | 否 | `5` 秒，TERM 到 KILL 的宽限期 |
-| `CHATGPT_MCP_DELEGATE_EXPLORE_MAX_PER_PROJECT` | 否 | `4` 个并发 reader |
-| `CHATGPT_MCP_DELEGATE_EXPLORE_MAX_GLOBAL` | 否 | 全局 `8` 个并发 reader |
-| `CHATGPT_MCP_DELEGATE_CODE_MAX_PER_PROJECT` | 否 | `1` 个 writer |
-| `CHATGPT_MCP_DELEGATE_CODE_MAX_GLOBAL` | 否 | 全局 `4` 个 writer |
-| `CHATGPT_MCP_DELEGATE_QUEUE_LIMIT_PER_PROJECT` | 否 | `32` 个排队任务 |
-| `CHATGPT_MCP_DELEGATE_QUEUE_LIMIT_GLOBAL` | 否 | 全局 `128` 个排队任务 |
 | `CHATGPT_MCP_DEBUG_MCP_LOGGING` | 否 | `0` |
 | `CHATGPT_MCP_GRACEFUL_SHUTDOWN_SECONDS` | 否 | `30` 秒 |
 | `CHATGPT_MCP_RELOAD_READY_TIMEOUT_SECONDS` | 否 | `15` 秒 |
@@ -448,7 +400,7 @@ Token-aware 只读响应使用 `o200k_base` 编码，并提供统一结果协议
 
 - `CHATGPT_MCP_WORKSPACE_ROOT` 只是相对路径锚点和默认工作目录，**不是文件系统 sandbox**。
 - 绝对路径仍会按绝对路径处理。
-- `run_command`、`job_*`、`tmux_*`、写入工具、Git 写操作和 `delegate_task` 都能以 server process 的权限修改本机。
+- `run_command`、`job_*`、`tmux_*`、写入工具和 Git 写操作都能以 server process 的权限修改本机。
 - 只连接可信 ChatGPT 账号/工作空间，只暴露你愿意授权的工具。
 - `CHATGPT_MCP_AUTH_TOKEN` 与 `CHATGPT_MCP_OAUTH_LOGIN_TOKEN` 应使用两个不同的随机值。
 - 保持 `CHATGPT_MCP_PUBLIC_BASE_URL` 稳定，不要依赖不可信 Host header 生成 OAuth issuer metadata。
@@ -477,7 +429,7 @@ python -m compileall src tests
 - 将 package、CLI、launchd label 和环境变量前缀统一为 `chatgpt-web-oauth-mcp` / `CHATGPT_MCP_*`；
 - 形成聚焦 ChatGPT Web OAuth MCP 的架构；
 - 增加有界、token-aware 的本地上下文工具；
-- 提供通用 Git、job、tmux 和可插拔 CLI Agent 委派流程。
+- 提供通用 Git、job、tmux 和持久 Codex runtime/MCP 流程。
 
 ## License
 

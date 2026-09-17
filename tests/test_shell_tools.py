@@ -169,7 +169,7 @@ def test_run_command_timeout_returns_unified_shape(tmp_path: Path) -> None:
     assert result["timeout"] == 1
     assert result["error"]["code"] == "timed_out"
     assert "timeout" in result["error"]["message"].lower()
-    assert result["hint"] == "increase_timeout_or_delegate"
+    assert result["hint"] == "increase_timeout_or_use_job_or_tmux"
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX process-group lifecycle assertion")
@@ -216,7 +216,7 @@ def test_run_command_rejects_timeout_above_limit_without_force(tmp_path: Path) -
     assert result["error"]["code"] == "timeout_exceeds_limit"
     assert result["error"]["force_required"] is True
     assert result["error"]["approval_required"] is True
-    assert result["hint"] == "delegate_task_or_force_after_user_approval"
+    assert result["hint"] == "job_or_tmux_or_force_after_user_approval"
 
 
 def test_run_command_allows_timeout_above_limit_with_force(tmp_path: Path) -> None:

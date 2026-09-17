@@ -142,7 +142,7 @@ def test_mcp_run_command_batch_end_to_end(tmp_path: Path, monkeypatch) -> None:
         anyio.run(scenario)
 
 
-def test_mcp_removed_task_tools_are_not_exposed(tmp_path: Path, monkeypatch) -> None:
+def test_mcp_removed_delegate_and_task_tools_are_not_exposed(tmp_path: Path, monkeypatch) -> None:
     token = "secret-token"
     with _running_server(tmp_path, monkeypatch, auth_token=token) as url:
 
@@ -150,14 +150,17 @@ def test_mcp_removed_task_tools_are_not_exposed(tmp_path: Path, monkeypatch) -> 
             async with _mcp_session(url, token=token) as session:
                 tools = await session.list_tools()
                 names = {tool.name for tool in tools.tools}
-                assert "delegate_task" in names
                 assert "run_command" in names
                 assert "get_skill_index" in names
-                assert "get_delegate_use" in names
                 assert "get_file_use" in names
                 assert "get_process_use" in names
                 assert "get_git_use" in names
                 for removed in {
+                    "delegate_task",
+                    "delegate_batch",
+                    "delegate_status",
+                    "delegate_cancel",
+                    "get_delegate_use",
                     "run_command_stream",
                     "wait_task",
                     "get_task",
@@ -180,17 +183,12 @@ def test_mcp_skill_tools_and_resources_end_to_end(tmp_path: Path, monkeypatch) -
             async with _mcp_session(url, token=token) as session:
                 index = await _call_tool(session, "get_skill_index", {})
                 assert index["success"] is True
-                assert index["skills"][0]["guide_tool"] == "get_delegate_use"
                 assert [skill["name"] for skill in index["skills"]] == [
-                    "delegate-use",
                     "file-use",
                     "process-use",
                     "git-use",
                 ]
 
-                guide_tool = await _call_tool(session, "get_delegate_use", {})
-                assert guide_tool["success"] is True
-                assert "# Delegate Use" in guide_tool["content"]
                 for tool_name, heading in [
                     ("get_file_use", "# File Use"),
                     ("get_process_use", "# Process Use"),
@@ -204,16 +202,12 @@ def test_mcp_skill_tools_and_resources_end_to_end(tmp_path: Path, monkeypatch) -
                 resource_uris = {str(resource.uri) for resource in resources.resources}
                 assert {
                     "skill://chatgpt-web-oauth-mcp/index",
-                    "skill://chatgpt-web-oauth-mcp/delegate-use",
                     "skill://chatgpt-web-oauth-mcp/file-use",
                     "skill://chatgpt-web-oauth-mcp/process-use",
                     "skill://chatgpt-web-oauth-mcp/git-use",
                 } <= resource_uris
+                assert "skill://chatgpt-web-oauth-mcp/delegate-use" not in resource_uris
 
-                guide_resource = await session.read_resource(
-                    "skill://chatgpt-web-oauth-mcp/delegate-use"
-                )
-                assert "# Delegate Use" in guide_resource.contents[0].text
                 for uri, heading in [
                     ("skill://chatgpt-web-oauth-mcp/file-use", "# File Use"),
                     ("skill://chatgpt-web-oauth-mcp/process-use", "# Process Use"),
@@ -223,49 +217,6 @@ def test_mcp_skill_tools_and_resources_end_to_end(tmp_path: Path, monkeypatch) -
                     assert heading in guide_resource.contents[0].text
 
         anyio.run(scenario)
-
-
-def test_mcp_delegate_task_structured_output_end_to_end(tmp_path: Path, monkeypatch) -> None:
-    token = "secret-token"
-    codex_command = _python_cmd("print('{\"ok\": true, \"source\": \"delegate\"}')")
-    with _running_server(
-        tmp_path,
-        monkeypatch,
-        auth_token=token,
-        codex_command=codex_command,
-    ) as url:
-
-        async def scenario() -> None:
-            async with _mcp_session(url, token=token) as session:
-                result = await _call_tool(
-                    session,
-                    "delegate_task",
-                    {
-                        "task": "emit json",
-                        "output_schema": {"type": "object"},
-                        "parse_structured_output": True,
-                    },
-                )
-                assert result["status"] == "succeeded"
-                assert result["serial"] is True
-                assert result["structured_output"] == {"ok": True, "source": "delegate"}
-
-        anyio.run(scenario)
-
-
-def test_mcp_delegate_task_validation_error_end_to_end(tmp_path: Path, monkeypatch) -> None:
-    token = "secret-token"
-    with _running_server(tmp_path, monkeypatch, auth_token=token) as url:
-
-        async def scenario() -> None:
-            async with _mcp_session(url, token=token) as session:
-                result = await _call_tool(session, "delegate_task", {})
-                assert result["success"] is False
-                assert result["status"] == "failed"
-                assert result["error"]["code"] == "missing_task_or_goal"
-
-        anyio.run(scenario)
-
 
 def test_mcp_canonical_search_and_read_text_end_to_end(tmp_path: Path, monkeypatch) -> None:
     token = "secret-token"

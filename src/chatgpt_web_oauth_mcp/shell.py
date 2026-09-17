@@ -1934,9 +1934,8 @@ def _timeout_limit_error(timeout: int) -> dict[str, object]:
             "code": "timeout_exceeds_limit",
             "message": (
                 f"run_command timeout is limited to {MAX_COMMAND_TIMEOUT_SECONDS}s. "
-                "Complex or long-running tasks should be delegated with delegate_task so a configured "
-                "CLI harness can run them with local audit logs. If run_command is still required, set force=true "
-                "only after explicit user approval."
+                "Use job_start for durable non-interactive work or tmux_* for interactive work. "
+                "If run_command is still required, set force=true only after explicit user approval."
             ),
             "requested_timeout_seconds": timeout,
             "max_timeout_seconds": MAX_COMMAND_TIMEOUT_SECONDS,
@@ -1948,7 +1947,7 @@ def _timeout_limit_error(timeout: int) -> dict[str, object]:
         "stderr": "",
         "timed_out": False,
         "timeout": timeout,
-        "hint": "delegate_task_or_force_after_user_approval",
+        "hint": "job_or_tmux_or_force_after_user_approval",
     }
 
 
@@ -2109,11 +2108,11 @@ def run_command(
                 "code": "timed_out",
                 "message": (
                     f"Command exceeded the {timeout}s timeout. "
-                    "Retry with a larger `timeout` argument, or use "
-                    "`delegate_task` for a project-scoped CLI-agent handoff."
+                    "Retry with a larger `timeout` argument, use `job_start` for durable "
+                    "non-interactive work, or use `tmux_*` for interactive work."
                 ),
             },
-            "hint": "increase_timeout_or_delegate",
+            "hint": "increase_timeout_or_use_job_or_tmux",
         }
 
     exit_code = process.returncode

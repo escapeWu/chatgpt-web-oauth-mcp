@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 
-SKILL_GUIDANCE_VERSION = "1.1"
+SKILL_GUIDANCE_VERSION = "1.4"
 SKILL_NAMESPACE = "chatgpt-web-oauth-mcp"
 SKILL_INDEX_URI = f"skill://{SKILL_NAMESPACE}/index"
 DELEGATE_USE_URI = f"skill://{SKILL_NAMESPACE}/delegate-use"
@@ -393,26 +393,6 @@ SKILL_INDEX = {
         "its critical rules. Refresh after a server upgrade or when tool behavior differs."
     ),
     "skills": [
-        {
-            "name": "delegate-use",
-            "description": (
-                "Safe, bounded use of delegate_task, delegate_batch, delegate_status, "
-                "and delegate_cancel across Codex, Pi, and custom CLI harnesses."
-            ),
-            "triggers": [
-                "Before the first delegate tool call in a task",
-                "When choosing a harness or explore/code kind",
-                "When monitoring, cancelling, or recovering delegate work",
-            ],
-            "required_before_tools": [
-                "delegate_task",
-                "delegate_batch",
-                "delegate_status",
-                "delegate_cancel",
-            ],
-            "guide_tool": "get_delegate_use",
-            "resource_uri": DELEGATE_USE_URI,
-        },
         {
             "name": "file-use",
             "description": (

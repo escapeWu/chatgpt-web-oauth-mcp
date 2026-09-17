@@ -27,23 +27,8 @@ from .shell import run_commands as run_commands_impl
 from .tool_context import LOCAL_WRITE_TOOL, OPEN_WORLD_WRITE_TOOL, READ_ONLY_TOOL, ToolContext
 
 
-DelegateModel = (
-    Literal[
-        "default",
-        "gpt-5.3-codex-spark",
-        "gpt-5.4-mini",
-        "gpt-5.5",
-        "gpt-5.6-sol",
-        "gpt-5.6-terra",
-        "gpt-5.6-luna",
-    ]
-    | str
-    | None
-)
-
-
 def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
-    """Register git, synchronous shell, and CLI-harness delegate tools."""
+    """Register git and synchronous/background shell tools."""
 
     @mcp.tool(
         name="git_status",
@@ -346,8 +331,8 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             Field(
                 description=(
                     f"Allow run_command timeouts above {MAX_COMMAND_TIMEOUT_SECONDS}s. Set this "
-                    "only after explicit user approval; otherwise use delegate_task for complex "
-                    "or long-running work."
+                    "only after explicit user approval; otherwise use job_start for durable "
+                    "non-interactive work or tmux_* for interactive sessions."
                 )
             ),
         ] = False,
@@ -578,159 +563,6 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
     ) -> dict[str, object]:
         return ctx.job_registry.kill_job(job_id=job_id, state_dir=ctx.state_dir, signal_name=signal)
 
-    delegate_description = (
-        "Run one project-scoped task through a configured CLI harness. Select harness=codex or "
-        "harness=pi; omitted harness uses the server default. Codex kind=explore uses "
-        "gpt-5.6-luna + low in a hard read-only sandbox; Codex kind=code uses gpt-5.6-sol + "
-        "xhigh and is the exclusive project "
-        "writer. Readers may overlap, writers are FIFO and exclusive, and separate projects can "
-        "run independently. Model routing also supports gpt-5.6-terra for single-module work, "
-        "gpt-5.6-luna for code search, and gpt-5.3-codex-spark with reasoning_effort unset/default. "
-        "For general delegation, omit or pass empty/default for both model and reasoning_effort. "
-        "Use delegate_status with the returned delegate_id after a wait timeout."
-    )
-
-    @mcp.tool(
-        name="delegate_task",
-        title="Delegate Task",
-        annotations=OPEN_WORLD_WRITE_TOOL,
-        description=delegate_description,
-    )
-    def delegate_task(
-        task: Annotated[str | None, Field(description="Concrete bounded instruction; required unless goal is provided.")] = None,
-        harness: Annotated[str | None, Field(description="CLI harness name, currently codex or pi; omit to use the configured default.")] = None,
-        kind: Annotated[Literal["explore", "code"], Field(description="Read-only reader or exclusive coding writer.")] = "code",
-        goal: Annotated[str | None, Field(description="Optional objective or context for this execution slice.")] = None,
-        task_id: Annotated[str | None, Field(description="Optional caller-defined task label.")] = None,
-        cwd: Annotated[str | None, Field(description="Task working directory; defaults to the session cwd.")] = None,
-        group_id: Annotated[str | None, Field(description="Optional existing logical group label for advanced callers.")] = None,
-        depends_on_group_ids: Annotated[list[str] | None, Field(description="Groups that must complete before a code task may start.")] = None,
-        files_in_scope: Annotated[list[str] | None, Field(description="Paths the delegate may inspect or change within this slice.")] = None,
-        out_of_scope: Annotated[list[str] | None, Field(description="Paths, actions, or topics the delegate must avoid.")] = None,
-        context_files: Annotated[list[str] | None, Field(description="Relevant file paths to mention in the delegate prompt.")] = None,
-        acceptance_criteria: Annotated[list[str] | None, Field(description="Conditions the delegate should satisfy before finishing.")] = None,
-        done_means: Annotated[list[str] | None, Field(description="Explicit completion evidence required from the delegate.")] = None,
-        verification_commands: Annotated[list[str] | None, Field(description="Commands the delegate should use to verify code work.")] = None,
-        commit_mode: Annotated[Literal["allowed", "required", "forbidden"], Field(description="Commit permission for code tasks; explore always forces forbidden.")] = "allowed",
-        model: Annotated[
-            DelegateModel,
-            Field(description=(
-                "Optional model override. gpt-5.6-sol is strongest for architecture and complex work; "
-                "gpt-5.6-terra fits regular development and single-module work; gpt-5.6-luna fits code search; "
-                "gpt-5.3-codex-spark fits fast context-gathering tasks with Codex. With harness=pi, "
-                "use Pi's provider/model pattern, or omit/default to inherit Pi configuration."
-            )),
-        ] = None,
-        reasoning_effort: Annotated[
-            Literal["default", "none", "minimal", "low", "medium", "high", "xhigh", "max"],
-            Field(description=(
-                "Optional reasoning override. Use model=gpt-5.3-codex-spark with unset/default for fast "
-                "context gathering; omit/default for general delegation or to inherit Pi configuration."
-            )),
-        ] = "default",
-        timeout: Annotated[int | None, Field(description="Deprecated alias for this MCP call's wait window in seconds.", gt=0)] = None,
-        wait_seconds: Annotated[float | None, Field(description="How long this MCP call waits before returning queued/running status.", ge=0)] = None,
-        execution_timeout_seconds: Annotated[int | None, Field(description="Hard subprocess lifetime limit; defaults to 900s explore or 3600s code.", gt=0)] = None,
-        output_schema: Annotated[dict[str, object] | None, Field(description="Optional expected JSON result schema metadata.")] = None,
-        parse_structured_output: Annotated[bool, Field(description="Parse best-effort JSON from the process logs.")] = True,
-    ) -> dict[str, object]:
-        resolved_cwd = resolve_cwd(cwd, ctx.workspace_root)
-        effective_wait = wait_seconds if wait_seconds is not None else timeout
-        if effective_wait is None:
-            effective_wait = ctx.delegate_wait_timeout
-        return ctx.registry.run_delegate(
-            task=task,
-            harness=harness,
-            kind=kind,
-            goal=goal,
-            task_id=task_id,
-            cwd=resolved_cwd,
-            group_id=group_id,
-            depends_on_group_ids=depends_on_group_ids,
-            wait_seconds=effective_wait,
-            execution_timeout_seconds=execution_timeout_seconds,
-            files_in_scope=files_in_scope,
-            out_of_scope=out_of_scope,
-            context_files=context_files,
-            acceptance_criteria=acceptance_criteria,
-            done_means=done_means,
-            verification_commands=verification_commands,
-            commit_mode=commit_mode,
-            model=model,
-            reasoning_effort=reasoning_effort,
-            output_schema=output_schema,
-            parse_structured_output=parse_structured_output,
-        )
-
-    @mcp.tool(
-        name="delegate_batch",
-        title="Delegate Exploration Batch",
-        annotations=OPEN_WORLD_WRITE_TOOL,
-        description="Fan out multiple read-only explore tasks in one project and wait for the complete group barrier.",
-    )
-    def delegate_batch(
-        tasks: Annotated[list[dict[str, object]], Field(description="Explore task specifications; each requires task or goal.", min_length=1)],
-        harness: Annotated[str | None, Field(description="CLI harness name for every child, currently codex or pi; omit for the server default.")] = None,
-        cwd: Annotated[str | None, Field(description="Project working directory for every child task.")] = None,
-        max_concurrency: Annotated[int | None, Field(description="Optional group concurrency cap within the project limit.", gt=0)] = None,
-        wait_seconds: Annotated[float | None, Field(description="How long to wait for all children before returning group status.", ge=0)] = None,
-        execution_timeout_seconds: Annotated[int | None, Field(description="Hard lifetime limit for each explore child.", gt=0)] = None,
-        model: Annotated[DelegateModel, Field(description="Optional model override for all children; Codex defaults to gpt-5.6-luna while Pi inherits its configuration.")] = None,
-        reasoning_effort: Annotated[Literal["default", "none", "minimal", "low", "medium", "high", "xhigh", "max"], Field(description="Optional reasoning override for all children; Codex defaults to low while Pi inherits its configuration.")] = "default",
-    ) -> dict[str, object]:
-        resolved_cwd = resolve_cwd(cwd, ctx.workspace_root)
-        return ctx.registry.run_delegate_batch(
-            tasks=tasks,
-            harness=harness,
-            cwd=resolved_cwd,
-            max_concurrency=max_concurrency,
-            wait_seconds=wait_seconds if wait_seconds is not None else ctx.delegate_wait_timeout,
-            execution_timeout_seconds=execution_timeout_seconds,
-            model=model,
-            reasoning_effort=reasoning_effort,
-        )
-
-    @mcp.tool(
-        name="delegate_status",
-        title="Delegate Status",
-        annotations=READ_ONLY_TOOL,
-        description="Inspect one delegate, one group, one project, or the global active/recent registry; supports lifecycle long-polling.",
-    )
-    def delegate_status(
-        delegate_id: Annotated[str | None, Field(description="Optional server-generated delegate id.")] = None,
-        group_id: Annotated[str | None, Field(description="Optional server-generated exploration group id.")] = None,
-        project_cwd: Annotated[str | None, Field(description="Optional cwd resolved server-side to a project identity.")] = None,
-        limit: Annotated[int, Field(description="Maximum recent delegates to return.", ge=1, le=20)] = 10,
-        offset: Annotated[int, Field(description="Recent delegate pagination offset.", ge=0)] = 0,
-        watch_seconds: Annotated[float, Field(description="Long-poll window, returning on lifecycle or group-count changes.", ge=0, le=300)] = 0,
-        poll_seconds: Annotated[float, Field(description="Long-poll interval in seconds.", ge=0.1, le=60)] = 5,
-    ) -> dict[str, object]:
-        resolved_project_cwd = (
-            str(resolve_cwd(project_cwd, ctx.workspace_root)) if project_cwd else None
-        )
-        return ctx.registry.delegate_status(
-            delegate_id=delegate_id,
-            group_id=group_id,
-            project_cwd=resolved_project_cwd,
-            limit=limit,
-            offset=offset,
-            watch_seconds=watch_seconds,
-            poll_seconds=poll_seconds,
-            max_tokens=ctx.tool_output_token_budget,
-        )
-
-    @mcp.tool(
-        name="delegate_cancel",
-        title="Cancel Delegate",
-        annotations=OPEN_WORLD_WRITE_TOOL,
-        description="Cancel exactly one delegate or every queued/running child in one exploration group; running process groups receive TERM then KILL.",
-    )
-    def delegate_cancel(
-        delegate_id: Annotated[str | None, Field(description="Delegate id to cancel; mutually exclusive with group_id.")] = None,
-        group_id: Annotated[str | None, Field(description="Group id whose children should all be cancelled.")] = None,
-    ) -> dict[str, object]:
-        return ctx.registry.delegate_cancel(delegate_id=delegate_id, group_id=group_id)
-
     return {
         "git_status": git_status,
         "git_diff": git_diff,
@@ -749,8 +581,4 @@ def register_git_shell_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
         "job_output": job_output,
         "job_tail": job_tail,
         "job_kill": job_kill,
-        "delegate_task": delegate_task,
-        "delegate_batch": delegate_batch,
-        "delegate_status": delegate_status,
-        "delegate_cancel": delegate_cancel,
     }

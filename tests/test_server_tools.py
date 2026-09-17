@@ -476,81 +476,10 @@ def test_server_search_regex_uses_rust_regex_semantics(tmp_path: Path) -> None:
     assert "Rust regex syntax" in result["error"]["message"]
 
 
-def test_server_delegate_task_accepts_structured_fields(tmp_path: Path) -> None:
-    from chatgpt_web_oauth_mcp import server
-
-    old_registry = server.registry
-    try:
-        server.registry = ExecutorRegistry(codex_command="python3 -c \"print('{\\\"ok\\\": true}')\"")
-        result = _call(
-            server.delegate_task,
-            task="Implement the fallback flow",
-            goal="Ship a working fallback task runner",
-            cwd=str(tmp_path),
-            acceptance_criteria=["Tool returns structured status"],
-            verification_commands=["pytest -q"],
-            commit_mode="allowed",
-            model="gpt-5.4-mini",
-            reasoning_effort="medium",
-            output_schema={"type": "object"},
-        )
-
-        assert result["status"] == "succeeded"
-        assert result["executor"] == "codex"
-        assert result["serial"] is True
-        assert result["structured_output"] == {"ok": True}
-        assert result["output_schema"] == {"type": "object"}
-        assert result["model"] == "gpt-5.4-mini"
-        assert result["reasoning_effort"] == "medium"
-        assert "task_id" not in result
-    finally:
-        server.registry = old_registry
 
 
-def test_server_delegate_task_validation_errors_are_structured(tmp_path: Path) -> None:
-    from chatgpt_web_oauth_mcp import server
-
-    old_registry = server.registry
-    try:
-        server.registry = ExecutorRegistry(codex_command=_python_cmd("print('should-not-run')"))
-        missing_task = _call(server.delegate_task, cwd=str(tmp_path))
-        invalid_commit_mode = _call(
-            server.delegate_task,
-            task="Implement the fallback flow",
-            cwd=str(tmp_path),
-            commit_mode="disallowed",
-        )
-
-        assert missing_task["success"] is False
-        assert missing_task["status"] == "failed"
-        assert missing_task["error"]["code"] == "missing_task_or_goal"
-        assert invalid_commit_mode["success"] is False
-        assert invalid_commit_mode["status"] == "failed"
-        assert invalid_commit_mode["error"]["code"] == "unsupported_commit_mode"
-    finally:
-        server.registry = old_registry
 
 
-def test_server_delegate_status_lists_recent_delegates(tmp_path: Path) -> None:
-    from chatgpt_web_oauth_mcp import server
-
-    old_registry = server.registry
-    try:
-        server.registry = ExecutorRegistry(codex_command=_python_cmd("print('ok')"))
-        result = _call(
-            server.delegate_task,
-            task="Run a short status-visible task",
-            cwd=str(tmp_path),
-        )
-        status = _call(server.delegate_status)
-
-        assert result["status"] == "succeeded"
-        assert status["success"] is True
-        assert status["latest"]["delegate_id"] == result["delegate_id"]
-        assert status["latest"]["status"] == "succeeded"
-        assert status["latest"]["logs"]["stdout"]
-    finally:
-        server.registry = old_registry
 
 
 def test_server_apply_patch_tool_description_uses_generic_patch_language() -> None:
@@ -571,35 +500,6 @@ def test_server_apply_patch_tool_description_uses_generic_patch_language() -> No
     assert "*** Begin Patch" in description
 
 
-def test_delegate_task_describes_common_model_reasoning_combinations() -> None:
-    from chatgpt_web_oauth_mcp import server
-
-    async def scenario() -> tuple[str, dict[str, object]]:
-        list_tools = getattr(server.mcp, "_list_tools")
-        try:
-            tools = await list_tools()
-        except TypeError:
-            tools = await list_tools(None)
-        delegate_tool = next(tool for tool in tools if tool.name == "delegate_task")
-        return delegate_tool.description, delegate_tool.parameters
-
-    description, parameters = asyncio.run(scenario())
-    model_description = parameters["properties"]["model"]["description"]
-    reasoning_description = parameters["properties"]["reasoning_effort"]["description"]
-
-    for model in ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]:
-        assert model in description
-        assert model in model_description
-    assert "architecture" in model_description
-    assert "single-module work" in model_description
-    assert "code search" in model_description
-    assert "gpt-5.3-codex-spark" in description
-    assert "reasoning_effort unset/default" in description
-    assert "omit or pass empty/default for both model and reasoning_effort" in description
-    assert "gpt-5.3-codex-spark" in model_description
-    assert "fast context-gathering tasks" in model_description
-    assert "model=gpt-5.3-codex-spark" in reasoning_description
-    assert "general delegation" in reasoning_description
 
 
 def test_code_map_descriptions_explain_development_usage() -> None:
@@ -650,35 +550,6 @@ def test_registered_tool_input_schemas_document_parameters() -> None:
                 missing.append(f"{tool_name}.{param_name}")
 
     assert missing == []
-    assert schemas["delegate_task"]["properties"]["commit_mode"]["enum"] == [
-        "allowed",
-        "required",
-        "forbidden",
-    ]
-    assert schemas["delegate_task"]["properties"]["reasoning_effort"]["enum"] == [
-        "default",
-        "none",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max",
-    ]
-    model_schema = schemas["delegate_task"]["properties"]["model"]
-    recommended_models = next(
-        choice["enum"] for choice in model_schema["anyOf"] if "enum" in choice
-    )
-    assert recommended_models == [
-        "default",
-        "gpt-5.3-codex-spark",
-        "gpt-5.4-mini",
-        "gpt-5.5",
-        "gpt-5.6-sol",
-        "gpt-5.6-terra",
-        "gpt-5.6-luna",
-    ]
-    assert any(choice.get("type") == "string" for choice in model_schema["anyOf"])
     for name in ["command", "commands", "mode", "max_concurrency", "force"]:
         assert name in schemas["run_command"]["properties"]
     for name in ["queries", "mode", "max_concurrency", "file_type", "only_matching"]:
@@ -708,16 +579,6 @@ def test_registered_tool_input_schemas_document_parameters() -> None:
         "clean",
         "detached",
     ]
-    for name in ["task_id", "files_in_scope", "out_of_scope", "done_means", "model", "reasoning_effort"]:
-        assert name in schemas["delegate_task"]["properties"]
-    for name in ["harness", "kind", "execution_timeout_seconds", "depends_on_group_ids"]:
-        assert name in schemas["delegate_task"]["properties"]
-    for name in ["tasks", "harness", "max_concurrency", "wait_seconds", "execution_timeout_seconds"]:
-        assert name in schemas["delegate_batch"]["properties"]
-    for name in ["delegate_id", "group_id", "project_cwd", "limit", "watch_seconds", "poll_seconds"]:
-        assert name in schemas["delegate_status"]["properties"]
-    for name in ["delegate_id", "group_id"]:
-        assert name in schemas["delegate_cancel"]["properties"]
 
 
 def test_server_tools_expose_chatgpt_compatible_annotations() -> None:
@@ -759,12 +620,7 @@ def test_server_tools_expose_chatgpt_compatible_annotations() -> None:
     assert annotations["run_command"]["openWorldHint"] is True
     assert annotations["job_list"]["readOnlyHint"] is True
     assert annotations["job_output"]["readOnlyHint"] is True
-    assert annotations["delegate_task"]["openWorldHint"] is True
-    assert annotations["delegate_batch"]["openWorldHint"] is True
-    assert annotations["delegate_status"]["readOnlyHint"] is True
-    assert annotations["delegate_cancel"]["openWorldHint"] is True
     assert annotations["get_skill_index"]["readOnlyHint"] is True
-    assert annotations["get_delegate_use"]["readOnlyHint"] is True
     assert annotations["get_file_use"]["readOnlyHint"] is True
     assert annotations["get_process_use"]["readOnlyHint"] is True
     assert annotations["get_git_use"]["readOnlyHint"] is True

@@ -6,7 +6,7 @@
 
 A local [FastMCP](https://github.com/jlowin/fastmcp) server that lets **ChatGPT Web** call trusted tools on your computer through a remote HTTPS MCP endpoint protected by OAuth.
 
-It exposes bounded filesystem and code-search tools, structured Git operations, short shell commands, durable background jobs, persistent tmux sessions, and project-scoped CLI-agent delegation while keeping ChatGPT Web in the architect / manager / reviewer role.
+It exposes bounded filesystem and code-search tools, structured Git operations, short shell commands, durable background jobs, persistent tmux sessions, and persistent Codex runtime/MCP access while keeping ChatGPT Web in the architect / manager / reviewer role.
 
 ## Why this project exists
 
@@ -18,7 +18,7 @@ This project provides that bridge:
 - ChatGPT-compatible OAuth discovery, dynamic client registration, PKCE, and bearer-token validation;
 - optional Cloudflare Tunnel and macOS `launchd` helpers;
 - local-operation tools with explicit pagination, token budgets, and bounded output;
-- separate execution paths for short commands, durable jobs, interactive terminal sessions, and delegated coding.
+- separate execution paths for short commands, durable jobs, interactive terminal sessions, and persistent Codex runtime/MCP access.
 
 ## Architecture
 
@@ -42,10 +42,12 @@ FastMCP server on 127.0.0.1:8766
     │   ├── job_*           durable non-interactive jobs
     │   └── tmux_*          persistent interactive TTY sessions
     │
-    └── delegate_task       one bounded Codex, Pi, or custom CLI-harness slice
+    └── Codex runtime
+        ├── codex_runtime_* persistent runtime bindings
+        └── codex_mcp_*     connected MCP inventory and calls
 ```
 
-ChatGPT Web should inspect, plan, make small direct edits when appropriate, and verify results through MCP tools. `delegate_task` is deliberately not a general-purpose agent loop: it runs one bounded task through the selected CLI harness and returns auditable status and log paths.
+ChatGPT Web should inspect, plan, edit, and verify through direct MCP tools. Persistent Codex access is provided by `codex_runtime_*` and `codex_mcp_*`; these runtime tools do not start a Codex LLM turn.
 
 ## Core capabilities
 
@@ -58,7 +60,7 @@ ChatGPT Web should inspect, plan, make small direct edits when appropriate, and 
 | Safe mechanical edits | Full-file writes, structured patches, CAS-protected batch replacement with atomic writes and format preservation |
 | Git | Status, diff, commit, log, show, blame, and a small worktree lifecycle |
 | Local execution | Bounded commands, durable background jobs, and persistent tmux sessions |
-| CLI-agent delegation | Pluggable Codex/Pi harnesses, model/reasoning overrides, fair reader/writer scheduling, long polling, private audit logs |
+| Codex runtime | Persistent Codex App Server bindings plus connected MCP inventory/calls |
 | macOS operations | Development tunnel, persistent `launchd` install, status, doctor, reload, restart, and uninstall helpers |
 
 ## Operating model
@@ -66,34 +68,10 @@ ChatGPT Web should inspect, plan, make small direct edits when appropriate, and 
 Use the narrowest tool that matches the task:
 
 1. Inspect with `list_files`, `search`, `read_text`, `read`, `code_map_*`, `git_status`, or `git_diff`.
-2. Make small deterministic changes with `apply_patch`, `replace`, `write_file`, or structured Git tools.
-3. Verify directly.
-4. Use `delegate_task` only when a bounded implementation task genuinely benefits from a local CLI agent.
-
-A good delegation request includes:
-
-- one clear task or goal;
-- a narrow `cwd` and `files_in_scope`;
-- explicit `out_of_scope` items;
-- acceptance criteria and `done_means`;
-- verification commands;
-- a deliberate `commit_mode`.
-
-Delegates use a project-scoped fair reader/writer scheduler. In one project, multiple `kind=explore` readers may overlap, while `kind=code` writers are exclusive and FIFO; once a writer is queued, later readers cannot overtake it. Git worktrees sharing one common Git directory are treated as the same project. Different projects schedule independently, subject to configurable global safety limits.
-
-Choose `harness=codex` or `harness=pi`; omitting it uses `CHATGPT_MCP_DELEGATE_DEFAULT_HARNESS` (`codex` by default). Codex exploration uses `codex exec --sandbox read-only --ephemeral`. Pi exploration disables sessions, project trust/context, extensions, and Pi-local skills, and restricts tools to `read,grep,find,ls`. Every explore also forces `commit_mode=forbidden` and performs a defensive before/after Git status audit. Pi code tasks run non-interactively with project trust enabled and the normal Pi tool set. Use `delegate_batch` for read-only fan-out/fan-in, `delegate_status` to monitor a delegate/group/project, and `delegate_cancel` to terminate a task or group.
-
-Each delegate writes a private audit directory under the system temporary cache:
-
-```text
-chatgpt-web-oauth-mcp/<harness>-delegates/<timestamp>-<delegate_id>/
-├── prompt.txt
-├── stdout.log
-├── stderr.log
-└── metadata.json
-```
-
-Completed `delegate_task` responses do not inline raw stdout or stderr. Read the returned log paths when the original output is required.
+2. Make deterministic changes with `apply_patch`, `replace`, `write_file`, or structured Git tools.
+3. Use `run_command`, `job_*`, or `tmux_*` according to process lifetime and interactivity.
+4. Use `codex_runtime_*` and `codex_mcp_*` when persistent Codex runtime or connected MCP access is required.
+5. Verify results directly before declaring completion.
 
 ## Requirements
 
@@ -101,7 +79,7 @@ Completed `delegate_task` responses do not inline raw stdout or stderr. Read the
 - Git
 - `ripgrep` for the preferred search backend
 - `tmux` for persistent interactive sessions
-- Codex CLI and/or Pi coding agent CLI for `delegate_task`
+- Codex CLI when using the persistent Codex runtime integration
 - `cloudflared` only when using the included tunnel helpers
 - macOS only for the included `launchd` scripts; the Python server itself is not launchd-specific
 
@@ -256,7 +234,6 @@ The watchdog checks service health. The doctor script applies targeted restarts 
 | --- | --- |
 | `server_info` | Inspect runtime configuration and registered MCP tools |
 | `get_skill_index` | Discover progressive-disclosure operating guides and their trigger conditions |
-| `get_delegate_use` | Load the complete delegate operating contract before using delegate tools |
 | `get_file_use` | Load the file discovery, reading, code-map, editing, encoding, pagination, and CAS contract |
 | `get_process_use` | Load the command/job/tmux selection and lifecycle contract |
 | `get_git_use` | Load the repository, commit, history, and worktree safety contract |
@@ -318,32 +295,20 @@ The watchdog checks service health. The doctor script applies targeted restarts 
 
 `tmux_capture` is not a lossless application log. Full-screen TUIs, progress bars, carriage-return updates, and tmux history limits can change what is visible. Prefer application log files, or use modes such as `--no-alt-screen` when terminal history matters.
 
-### CLI-agent delegation
+### Operating guides
 
-| Tool | Purpose |
-| --- | --- |
-| `delegate_task` | Submit one read-only explore reader or exclusive code writer through a selected harness |
-| `delegate_batch` | Fan out read-only exploration tasks through one harness and fan in at a group barrier |
-| `delegate_status` | Monitor a delegate, group, project, or active/recent registry state |
-| `delegate_cancel` | Cancel one delegate or every child in one exploration group |
-
-Call `get_skill_index` to discover guides, then load the matching guide before the first workflow in that tool family: `get_file_use`, `get_process_use`, `get_git_use`, or `get_delegate_use`. This mirrors tool-plus-skill systems such as Figma's: tool schemas describe individual arguments, while guides carry cross-tool workflow, safety, lifecycle, monitoring, and recovery rules.
+Call `get_skill_index` to discover guides, then load the matching guide before the first workflow in that tool family: `get_file_use`, `get_process_use`, or `get_git_use`.
 
 The same authoritative content is also exposed through standard MCP resources:
 
 | Resource | Purpose |
 | --- | --- |
 | `skill://chatgpt-web-oauth-mcp/index` | Machine-readable guide index, triggers, and tool/resource routing |
-| `skill://chatgpt-web-oauth-mcp/delegate-use` | Complete Markdown delegate guide |
 | `skill://chatgpt-web-oauth-mcp/file-use` | Complete Markdown file workflow guide |
 | `skill://chatgpt-web-oauth-mcp/process-use` | Complete Markdown command, job, and tmux guide |
 | `skill://chatgpt-web-oauth-mcp/git-use` | Complete Markdown Git and worktree guide |
 
-Tools and resources are intentionally both exposed. Native MCP clients may use `resources/list` and `resources/read`; gateways such as Pi can call `get_skill_index` and the matching `get_*_use` tool even when they surface resources only as tools. Each guide has one source in the server package, preventing filesystem copies from drifting. Pi explore's `--no-skills` flag disables Pi-local skill injection inside the delegated subprocess; it does not disable these MCP guidance endpoints used by the managing agent.
-
-The scheduler and process runner depend only on the `DelegateHarness` adapter protocol. Codex and Pi are built-in adapters; additional stdin-driven agents can be registered programmatically with `GenericCliHarness`, including separate code/read-only commands and model/reasoning argument templates. A custom harness must explicitly provide a read-only command before it can accept `kind=explore`; prompt wording alone never grants that capability.
-
-The wait window and process lifetime are separate. A wait expiry returns `status=queued` or `status=running` without killing the process. The per-kind execution timeout is a hard limit: the server sends `SIGTERM` to the process group, waits for the cancel grace period, then sends `SIGKILL`. Explore defaults to `gpt-5.6-luna` + `low` with a 900-second execution limit; code defaults to `gpt-5.6-sol` + `xhigh` with a 3600-second limit.
+Tools and resources are intentionally both exposed so clients can use whichever discovery surface they support.
 
 ## Choosing an execution tool
 
@@ -352,7 +317,6 @@ The wait window and process lifetime are separate. A wait expiry returns `status
 | A short, bounded, non-interactive command | `run_command` | Long-running daemons or interactive TUIs |
 | A durable non-interactive process with inspectable logs | `job_*` | Interactive input |
 | A persistent interactive terminal or manually attachable session | `tmux_*` | Lossless stdout/stderr capture |
-| A bounded task delegated to a configured CLI agent | `delegate_task` | Broad planning, multiple unrelated tasks, or unlimited autonomous work |
 
 ## Output budgets and pagination
 
@@ -394,19 +358,7 @@ Batch `read_text`, `search`, and `run_command` calls use one shared response bud
 | `CHATGPT_MCP_RUN_CAPTURE_MAX_BYTES` | no | `1048576` bytes |
 | `CHATGPT_MCP_CODEX_COMMAND` | no | `codex` |
 | `CHATGPT_MCP_PI_COMMAND` | no | `pi` |
-| `CHATGPT_MCP_DELEGATE_DEFAULT_HARNESS` | no | `codex`; accepted built-ins are `codex` and `pi` |
 | `CHATGPT_MCP_COMMAND_TIMEOUT` | no | `120` seconds |
-| `CHATGPT_MCP_DELEGATE_TIMEOUT` | no | `300` seconds; compatibility fallback for the wait window |
-| `CHATGPT_MCP_DELEGATE_WAIT_TIMEOUT` | no | `300` seconds |
-| `CHATGPT_MCP_DELEGATE_EXPLORE_EXECUTION_TIMEOUT` | no | `900` seconds, hard limit per explore task |
-| `CHATGPT_MCP_DELEGATE_CODE_EXECUTION_TIMEOUT` | no | `3600` seconds, hard limit per code task |
-| `CHATGPT_MCP_DELEGATE_CANCEL_GRACE_SECONDS` | no | `5` seconds between TERM and KILL |
-| `CHATGPT_MCP_DELEGATE_EXPLORE_MAX_PER_PROJECT` | no | `4` concurrent readers |
-| `CHATGPT_MCP_DELEGATE_EXPLORE_MAX_GLOBAL` | no | `8` concurrent readers globally |
-| `CHATGPT_MCP_DELEGATE_CODE_MAX_PER_PROJECT` | no | `1` writer |
-| `CHATGPT_MCP_DELEGATE_CODE_MAX_GLOBAL` | no | `4` writers globally |
-| `CHATGPT_MCP_DELEGATE_QUEUE_LIMIT_PER_PROJECT` | no | `32` queued tasks |
-| `CHATGPT_MCP_DELEGATE_QUEUE_LIMIT_GLOBAL` | no | `128` queued tasks globally |
 | `CHATGPT_MCP_DEBUG_MCP_LOGGING` | no | `0` |
 | `CHATGPT_MCP_GRACEFUL_SHUTDOWN_SECONDS` | no | `30` seconds |
 | `CHATGPT_MCP_RELOAD_READY_TIMEOUT_SECONDS` | no | `15` seconds |
@@ -448,7 +400,7 @@ Important boundaries:
 
 - `CHATGPT_MCP_WORKSPACE_ROOT` is a relative-path anchor and default working directory. It is **not** a filesystem sandbox.
 - Absolute paths remain absolute.
-- `run_command`, `job_*`, `tmux_*`, write tools, Git writes, and `delegate_task` can modify the local machine with the permissions of the server process.
+- `run_command`, `job_*`, `tmux_*`, write tools, and Git writes can modify the local machine with the permissions of the server process.
 - Only connect trusted ChatGPT accounts/workspaces and only expose the tools you are prepared to authorize.
 - Prefer separate random values for `CHATGPT_MCP_AUTH_TOKEN` and `CHATGPT_MCP_OAUTH_LOGIN_TOKEN`.
 - Keep `CHATGPT_MCP_PUBLIC_BASE_URL` stable and do not rely on untrusted Host headers for OAuth issuer metadata.
@@ -477,7 +429,7 @@ Major changes include:
 - renamed package, CLI, launchd labels, and environment prefix to `chatgpt-web-oauth-mcp` / `CHATGPT_MCP_*`;
 - a focused ChatGPT Web OAuth MCP architecture;
 - bounded, token-aware local context tools;
-- generic Git, job, tmux, and pluggable CLI-agent delegation workflows.
+- generic Git, job, tmux, and persistent Codex runtime/MCP workflows.
 
 ## License
 
