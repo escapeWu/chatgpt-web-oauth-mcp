@@ -59,7 +59,7 @@ src/chatgpt_web_oauth_mcp/
 | Tool | Purpose |
 |---|---|
 | `server_info` | Inspect runtime config and available MCP tools |
-| `get_skill_index` / `get_*_use` | Discover and load file, process, or Git operating guides before matching workflows |
+| `get_skill_index` / `get_*_use` | Discover and load file, process, runtime, or Git operating guides before matching workflows |
 | `set_default_cwd` / `get_default_cwd` | Manage session default working directory |
 | `env_snapshot` / `env_diff` | Read-only runtime diagnostics and inline snapshot comparison |
 | `list_files` | Ignore-aware directory listing with sort/type filters, stable pagination, and token budgets |
@@ -75,7 +75,7 @@ src/chatgpt_web_oauth_mcp/
 | `run_command` | Execute one shell command, or multiple commands with `mode="sequential"` or `mode="parallel"`; timeout is capped at 300s unless `force=true` is used after explicit user approval; parallel batches cap `max_concurrency` at 3 |
 | `job_start` / `job_list` / `job_status` / `job_output` / `job_tail` / `job_kill` | Durable generic background jobs with disk-registry discovery, per-stream byte-cursor output, and backward-compatible last-N-lines tailing; no scheduler, restart, dependencies, or artifact tracking |
 | `tmux_list` / `tmux_start` / `tmux_status` / `tmux_capture` / `tmux_send` / `tmux_kill` | Tiny persistent interactive TTY lifecycle; one primary-pane workflow, bounded capture, stdin-buffer text paste, and no attach or server-wide kill tool |
-| `codex_runtime_open` / `codex_runtime_resume` / `codex_runtime_status` / `codex_runtime_close` | Manage persistent Codex App Server runtime bindings |
+| `codex_runtime_acquire` / `codex_runtime_list` / `codex_runtime_open` / `codex_runtime_resume` / `codex_runtime_status` / `codex_runtime_close` | Reuse and manage persistent Codex App Server runtime bindings; idle bindings use TTL GC and detached bindings additionally use capacity LRU |
 | `codex_mcp_inventory` / `codex_mcp_call` | Inspect and call MCP servers connected to a Codex runtime without starting a Codex LLM turn |
 
 ## Guidance resources
@@ -83,6 +83,7 @@ src/chatgpt_web_oauth_mcp/
 - `skill://chatgpt-web-oauth-mcp/index` is the machine-readable skill index.
 - `skill://chatgpt-web-oauth-mcp/file-use` covers discovery, reading, code maps, and safe file mutation.
 - `skill://chatgpt-web-oauth-mcp/process-use` covers synchronous commands, durable jobs, and tmux sessions.
+- `skill://chatgpt-web-oauth-mcp/runtime-use` covers stable Codex runtime reuse, concurrency, idle-TTL GC, and detached-binding LRU.
 - `skill://chatgpt-web-oauth-mcp/git-use` covers repository inspection, commits, history, and worktrees.
 - The matching tools exist for clients and gateways that expose tools more reliably than MCP resources.
 - Keep guidance in `delegate_guidance.py`; do not maintain a second handwritten filesystem-skill copy.

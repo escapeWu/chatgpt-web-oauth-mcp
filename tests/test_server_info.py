@@ -39,11 +39,13 @@ def test_server_info_reports_metadata_and_tools() -> None:
         "guide_tools": {
             "file-use": "get_file_use",
             "process-use": "get_process_use",
+            "runtime-use": "get_runtime_use",
             "git-use": "get_git_use",
         },
         "guide_resources": {
             "file-use": "skill://chatgpt-web-oauth-mcp/file-use",
             "process-use": "skill://chatgpt-web-oauth-mcp/process-use",
+            "runtime-use": "skill://chatgpt-web-oauth-mcp/runtime-use",
             "git-use": "skill://chatgpt-web-oauth-mcp/git-use",
         },
         "progressive_disclosure": True,
@@ -53,6 +55,7 @@ def test_server_info_reports_metadata_and_tools() -> None:
         "skill://chatgpt-web-oauth-mcp/git-use",
         "skill://chatgpt-web-oauth-mcp/index",
         "skill://chatgpt-web-oauth-mcp/process-use",
+        "skill://chatgpt-web-oauth-mcp/runtime-use",
     ]
     assert payload["resource_count"] == len(payload["resources"])
 
@@ -61,6 +64,8 @@ def test_server_info_reports_metadata_and_tools() -> None:
     for name in [
         "server_info",
         "codex_runtime_open",
+        "codex_runtime_list",
+        "codex_runtime_acquire",
         "codex_runtime_resume",
         "codex_runtime_status",
         "codex_runtime_close",
@@ -91,6 +96,7 @@ def test_server_info_reports_metadata_and_tools() -> None:
         "get_skill_index",
         "get_file_use",
         "get_process_use",
+        "get_runtime_use",
         "get_git_use",
     ]:
         assert name in tools, f"expected {name} in tools list"

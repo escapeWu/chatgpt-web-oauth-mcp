@@ -9,10 +9,13 @@ from chatgpt_web_oauth_mcp.delegate_guidance import (
     GIT_USE_URI,
     PROCESS_USE_GUIDE,
     PROCESS_USE_URI,
+    RUNTIME_USE_GUIDE,
+    RUNTIME_USE_URI,
     SKILL_INDEX_URI,
     file_use_payload,
     git_use_payload,
     process_use_payload,
+    runtime_use_payload,
     skill_index_payload,
 )
 
@@ -24,9 +27,10 @@ def test_skill_index_routes_agents_to_operating_guides() -> None:
     assert payload["resource_uri"] == SKILL_INDEX_URI
     assert payload["discovery_tool"] == "get_skill_index"
     skills = {item["name"]: item for item in payload["skills"]}
-    assert set(skills) == {"file-use", "process-use", "git-use"}
+    assert set(skills) == {"file-use", "process-use", "runtime-use", "git-use"}
     assert skills["file-use"]["guide_tool"] == "get_file_use"
     assert skills["process-use"]["guide_tool"] == "get_process_use"
+    assert skills["runtime-use"]["guide_tool"] == "get_runtime_use"
     assert skills["git-use"]["guide_tool"] == "get_git_use"
 
     required_tools = {
@@ -40,6 +44,8 @@ def test_skill_index_routes_agents_to_operating_guides() -> None:
         "run_command",
         "job_start",
         "tmux_start",
+        "codex_runtime_acquire",
+        "codex_runtime_list",
         "git_status",
         "git_worktree_remove",
     } <= required_tools
@@ -100,6 +106,23 @@ def test_git_use_guide_contains_critical_operating_contracts() -> None:
         assert required in GIT_USE_GUIDE
 
 
+def test_runtime_use_guide_contains_reuse_and_gc_contracts() -> None:
+    payload = runtime_use_payload()
+    assert payload["success"] is True
+    assert payload["resource_uri"] == RUNTIME_USE_URI
+    assert payload["content"] == RUNTIME_USE_GUIDE
+    for required in [
+        "codex_runtime_acquire",
+        "codex_runtime_list",
+        "stable name",
+        "8-hour",
+        "LRU",
+        "Capacity LRU never evicts a `ready` runtime",
+        "runtime_limit_reached",
+    ]:
+        assert required in RUNTIME_USE_GUIDE
+
+
 def test_skill_resources_share_the_same_authoritative_content() -> None:
     from chatgpt_web_oauth_mcp.server import mcp
 
@@ -110,6 +133,7 @@ def test_skill_resources_share_the_same_authoritative_content() -> None:
             SKILL_INDEX_URI,
             FILE_USE_URI,
             PROCESS_USE_URI,
+            RUNTIME_USE_URI,
             GIT_USE_URI,
         } <= resource_uris
         assert "skill://chatgpt-web-oauth-mcp/delegate-use" not in resource_uris
@@ -117,6 +141,7 @@ def test_skill_resources_share_the_same_authoritative_content() -> None:
         for uri, expected in [
             (FILE_USE_URI, FILE_USE_GUIDE),
             (PROCESS_USE_URI, PROCESS_USE_GUIDE),
+            (RUNTIME_USE_URI, RUNTIME_USE_GUIDE),
             (GIT_USE_URI, GIT_USE_GUIDE),
         ]:
             guide = await mcp.read_resource(uri)

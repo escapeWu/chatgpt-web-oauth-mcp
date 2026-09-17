@@ -9,6 +9,7 @@ from .delegate_guidance import (
     FILE_USE_URI,
     GIT_USE_URI,
     PROCESS_USE_URI,
+    RUNTIME_USE_URI,
     SKILL_INDEX_URI,
 )
 from .envtools import env_diff as env_diff_impl
@@ -82,11 +83,13 @@ def register_core_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
                 "guide_tools": {
                     "file-use": "get_file_use",
                     "process-use": "get_process_use",
+                    "runtime-use": "get_runtime_use",
                     "git-use": "get_git_use",
                 },
                 "guide_resources": {
                     "file-use": FILE_USE_URI,
                     "process-use": PROCESS_USE_URI,
+                    "runtime-use": RUNTIME_USE_URI,
                     "git-use": GIT_USE_URI,
                 },
                 "progressive_disclosure": True,

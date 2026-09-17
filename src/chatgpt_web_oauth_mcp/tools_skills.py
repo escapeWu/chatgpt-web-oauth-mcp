@@ -9,10 +9,13 @@ from .delegate_guidance import (
     GIT_USE_URI,
     PROCESS_USE_GUIDE,
     PROCESS_USE_URI,
+    RUNTIME_USE_GUIDE,
+    RUNTIME_USE_URI,
     SKILL_INDEX_URI,
     file_use_payload,
     git_use_payload,
     process_use_payload,
+    runtime_use_payload,
     skill_index_json,
     skill_index_payload,
 )
@@ -60,6 +63,19 @@ def register_skill_tools(mcp: Any) -> dict[str, object]:
     )
     def process_use_resource() -> str:
         return PROCESS_USE_GUIDE
+
+    @mcp.resource(
+        RUNTIME_USE_URI,
+        name="runtime-use",
+        title="Runtime Use Guide",
+        description=(
+            "Lifecycle guide for stable Codex runtime acquisition/reuse, concurrency, "
+            "idle-TTL GC, and detached-binding LRU eviction."
+        ),
+        mime_type="text/markdown",
+    )
+    def runtime_use_resource() -> str:
+        return RUNTIME_USE_GUIDE
 
     @mcp.resource(
         GIT_USE_URI,
@@ -116,6 +132,18 @@ def register_skill_tools(mcp: Any) -> dict[str, object]:
         return process_use_payload()
 
     @mcp.tool(
+        name="get_runtime_use",
+        title="Get Runtime Use Guide",
+        annotations=READ_ONLY_TOOL,
+        description=(
+            "Load the Codex runtime lifecycle guide. Call before the first codex_runtime_* "
+            "or codex_mcp_* workflow, especially for recurring worker reuse and capacity handling."
+        ),
+    )
+    def get_runtime_use() -> dict[str, object]:
+        return runtime_use_payload()
+
+    @mcp.tool(
         name="get_git_use",
         title="Get Git Use Guide",
         annotations=READ_ONLY_TOOL,
@@ -131,5 +159,6 @@ def register_skill_tools(mcp: Any) -> dict[str, object]:
         "get_skill_index": get_skill_index,
         "get_file_use": get_file_use,
         "get_process_use": get_process_use,
+        "get_runtime_use": get_runtime_use,
         "get_git_use": get_git_use,
     }

@@ -26,6 +26,7 @@ MAX_COMMAND_ARGUMENT_BYTES = 64 * 1024
 MAX_RUNTIME_NAME_LENGTH = 128
 MAX_FILTER_LENGTH = 256
 MAX_INVENTORY_LIMIT = 100
+MAX_RUNTIME_LIST_LIMIT = 100
 
 
 class CodexRuntimeManager:
@@ -37,8 +38,9 @@ class CodexRuntimeManager:
         state_dir: Path,
         codex_command: str | Sequence[str] = "codex",
         workspace_root: Path | None = None,
-        max_concurrency: int = 4,
+        max_concurrency: int = 8,
         max_runtimes: int = 64,
+        idle_ttl_seconds: float = 8 * 60 * 60,
         startup_timeout_seconds: float = 15.0,
         default_timeout_ms: int = 120_000,
         max_timeout_ms: int = 300_000,
@@ -50,6 +52,8 @@ class CodexRuntimeManager:
             raise ValueError("max_concurrency must be positive.")
         if max_runtimes <= 0:
             raise ValueError("max_runtimes must be positive.")
+        if idle_ttl_seconds <= 0:
+            raise ValueError("idle_ttl_seconds must be positive.")
         if default_timeout_ms <= 0 or max_timeout_ms <= 0:
             raise ValueError("runtime timeouts must be positive.")
         if default_timeout_ms > max_timeout_ms:
@@ -59,6 +63,7 @@ class CodexRuntimeManager:
         self.state_dir = Path(state_dir).expanduser().resolve()
         self.max_concurrency = int(max_concurrency)
         self.max_runtimes = int(max_runtimes)
+        self.idle_ttl_seconds = float(idle_ttl_seconds)
         self.startup_timeout_seconds = float(startup_timeout_seconds)
         self.default_timeout_ms = int(default_timeout_ms)
         self.max_timeout_ms = int(max_timeout_ms)
@@ -80,6 +85,9 @@ class CodexRuntimeManager:
             max_message_bytes=max_message_bytes,
         )
         self._live_thread_ids: set[str] = set()
+        self._last_gc_at: float | None = None
+        self._gc_collected_total = 0
+        self._lru_evicted_total = 0
         self._observed_connection_generation = getattr(
             self._adapter,
             "connection_generation",
@@ -91,6 +99,7 @@ class CodexRuntimeManager:
         return self._adapter
 
     def info(self) -> dict[str, object]:
+        self._collect_expired_idle(suppress_errors=True)
         with self._lock:
             binding_store: dict[str, object] = {
                 "available": self._load_error is None,
@@ -107,8 +116,18 @@ class CodexRuntimeManager:
                 "command": adapter_info.get("command", "codex"),
                 "capabilities": list(adapter_info.get("capabilities", [])),
                 "runtime_count": len(self._bindings),
+                "ready_count": sum(1 for binding in self._bindings.values() if binding.status == "ready"),
+                "detached_count": sum(1 for binding in self._bindings.values() if binding.status == "detached"),
                 "max_runtimes": self.max_runtimes,
                 "max_concurrency": self.max_concurrency,
+                "idle_ttl_seconds": self.idle_ttl_seconds,
+                "gc": {
+                    "policy": "idle-ttl-plus-capacity-lru",
+                    "last_gc_at": self._last_gc_at,
+                    "expired_collected_total": self._gc_collected_total,
+                    "lru_evicted_total": self._lru_evicted_total,
+                    "lru_scope": "detached-only",
+                },
                 "default_timeout_ms": self.default_timeout_ms,
                 "max_timeout_ms": self.max_timeout_ms,
                 "output_bytes_cap": self.output_bytes_cap,
@@ -126,14 +145,7 @@ class CodexRuntimeManager:
         target_cwd = self._validate_cwd(cwd)
         target_sandbox = validate_sandbox(sandbox)
         normalized_name = self._normalize_name(name)
-        with self._lock:
-            if len(self._bindings) >= self.max_runtimes:
-                raise CodexRuntimeError(
-                    "runtime_limit_reached",
-                    "The maximum number of Codex runtimes is already open.",
-                    retryable=True,
-                    details={"max_runtimes": self.max_runtimes},
-                )
+        self._ensure_capacity(required=1)
         with self._request_slot():
             result = self._adapter.thread_start(
                 cwd=str(target_cwd),
@@ -158,13 +170,7 @@ class CodexRuntimeManager:
         )
         try:
             with self._lock:
-                if len(self._bindings) >= self.max_runtimes:
-                    raise CodexRuntimeError(
-                        "runtime_limit_reached",
-                        "The maximum number of Codex runtimes is already open.",
-                        retryable=True,
-                        details={"max_runtimes": self.max_runtimes},
-                    )
+                self._ensure_capacity_locked(required=1)
                 updated = {**self._bindings, binding.runtime_id: binding}
                 self._save_bindings(updated)
         except CodexRuntimeError as exc:
@@ -174,6 +180,100 @@ class CodexRuntimeManager:
         self._sync_connection_generation()
         self._live_thread_ids.add(thread_id)
         return {"success": True, **runtime_public_dict(binding)}
+
+    def list_runtimes(
+        self,
+        *,
+        name: str | None,
+        cwd: Path | None,
+        status: str | None,
+        offset: int,
+        limit: int,
+    ) -> dict[str, object]:
+        self._ensure_store()
+        if offset < 0:
+            raise CodexRuntimeError("invalid_arguments", "offset must be non-negative.")
+        if limit <= 0 or limit > MAX_RUNTIME_LIST_LIMIT:
+            raise CodexRuntimeError(
+                "invalid_arguments",
+                f"limit must be between 1 and {MAX_RUNTIME_LIST_LIMIT}.",
+            )
+        normalized_name = self._normalize_name(name)
+        normalized_cwd = self._validate_cwd(cwd) if cwd is not None else None
+        normalized_status = self._normalize_runtime_status(status)
+        self._collect_expired_idle()
+        with self._lock:
+            matches = [
+                binding
+                for binding in self._bindings.values()
+                if (normalized_name is None or binding.name == normalized_name)
+                and (normalized_cwd is None or Path(binding.cwd).resolve() == normalized_cwd)
+                and (normalized_status is None or binding.status == normalized_status)
+            ]
+            matches.sort(
+                key=lambda binding: (binding.last_used_at, binding.created_at, binding.runtime_id),
+                reverse=True,
+            )
+            page = matches[offset : offset + limit]
+            next_offset = offset + len(page) if offset + len(page) < len(matches) else None
+            return {
+                "success": True,
+                "runtimes": [runtime_public_dict(binding) for binding in page],
+                "count": len(page),
+                "total": len(matches),
+                "offset": offset,
+                "limit": limit,
+                "next_offset": next_offset,
+            }
+
+    def acquire_runtime(
+        self,
+        *,
+        cwd: Path,
+        sandbox: SandboxMode,
+        name: str,
+    ) -> dict[str, object]:
+        self._ensure_store()
+        target_cwd = self._validate_cwd(cwd)
+        target_sandbox = validate_sandbox(sandbox)
+        normalized_name = self._normalize_name(name)
+        if normalized_name is None:
+            raise CodexRuntimeError(
+                "invalid_arguments",
+                "name is required for codex_runtime_acquire so the logical runtime can be reused safely.",
+            )
+        self._collect_expired_idle()
+        with self._lock:
+            matches = [
+                binding
+                for binding in self._bindings.values()
+                if binding.name == normalized_name
+                and Path(binding.cwd).resolve() == target_cwd
+                and binding.sandbox == target_sandbox
+            ]
+            matches.sort(
+                key=lambda binding: (binding.last_used_at, binding.created_at, binding.runtime_id),
+                reverse=True,
+            )
+            existing = matches[0] if matches else None
+        if existing is None:
+            opened = self.open_runtime(
+                cwd=target_cwd,
+                sandbox=target_sandbox,
+                name=normalized_name,
+            )
+            opened["acquire_mode"] = "opened"
+            opened["reused_existing"] = False
+            return opened
+        resumed = self.resume_runtime(
+            runtime_id=existing.runtime_id,
+            thread_id=None,
+            cwd=target_cwd,
+            sandbox=target_sandbox,
+        )
+        resumed["acquire_mode"] = resumed.get("resume_mode", "resumed")
+        resumed["reused_existing"] = True
+        return resumed
 
     def resume_runtime(
         self,
@@ -316,13 +416,8 @@ class CodexRuntimeManager:
             )
         try:
             with self._lock:
-                if existing is None and len(self._bindings) >= self.max_runtimes:
-                    raise CodexRuntimeError(
-                        "runtime_limit_reached",
-                        "The maximum number of Codex runtimes is already open.",
-                        retryable=True,
-                        details={"max_runtimes": self.max_runtimes},
-                    )
+                if existing is None:
+                    self._ensure_capacity_locked(required=1)
                 updated = dict(self._bindings)
                 updated[binding.runtime_id] = binding
                 self._save_bindings(updated)
@@ -557,6 +652,95 @@ class CodexRuntimeManager:
         if self._load_error is not None:
             raise self._load_error
 
+    def _collect_expired_idle(self, *, suppress_errors: bool = False) -> list[str]:
+        if self._load_error is not None:
+            if suppress_errors:
+                return []
+            raise self._load_error
+        with self._lock:
+            return self._collect_expired_idle_locked(
+                now=time.time(),
+                suppress_errors=suppress_errors,
+            )
+
+    def _collect_expired_idle_locked(
+        self,
+        *,
+        now: float,
+        suppress_errors: bool = False,
+    ) -> list[str]:
+        self._last_gc_at = now
+        expired = [
+            binding
+            for binding in self._bindings.values()
+            if now - binding.last_used_at >= self.idle_ttl_seconds
+        ]
+        if not expired:
+            return []
+        expired_ids = {binding.runtime_id for binding in expired}
+        updated = {
+            runtime_id: binding
+            for runtime_id, binding in self._bindings.items()
+            if runtime_id not in expired_ids
+        }
+        try:
+            self._store.save(updated)
+        except BindingStoreError as exc:
+            self._persistence_warning = exc.code
+            if suppress_errors:
+                return []
+            raise
+        self._bindings = updated
+        self._persistence_warning = None
+        self._gc_collected_total += len(expired)
+        for binding in expired:
+            self._live_thread_ids.discard(binding.thread_id)
+        return sorted(expired_ids)
+
+    def _ensure_capacity(self, *, required: int) -> list[str]:
+        self._ensure_store()
+        with self._lock:
+            return self._ensure_capacity_locked(required=required)
+
+    def _ensure_capacity_locked(self, *, required: int) -> list[str]:
+        if required <= 0:
+            return []
+        self._collect_expired_idle_locked(now=time.time())
+        overflow = len(self._bindings) + required - self.max_runtimes
+        if overflow <= 0:
+            return []
+        candidates = sorted(
+            (
+                binding
+                for binding in self._bindings.values()
+                if binding.status == "detached"
+            ),
+            key=lambda binding: (binding.last_used_at, binding.created_at, binding.runtime_id),
+        )
+        if len(candidates) < overflow:
+            raise CodexRuntimeError(
+                "runtime_limit_reached",
+                "The maximum number of Codex runtimes is active and no detached LRU binding can be evicted.",
+                retryable=True,
+                details={
+                    "max_runtimes": self.max_runtimes,
+                    "required": required,
+                    "detached_available": len(candidates),
+                },
+            )
+        evicted = candidates[:overflow]
+        evicted_ids = {binding.runtime_id for binding in evicted}
+        updated = {
+            runtime_id: binding
+            for runtime_id, binding in self._bindings.items()
+            if runtime_id not in evicted_ids
+        }
+        self._save_bindings(updated)
+        self._lru_evicted_total += len(evicted)
+        for binding in evicted:
+            self._live_thread_ids.discard(binding.thread_id)
+        return [binding.runtime_id for binding in evicted]
+
     def _sync_connection_generation(self) -> None:
         generation = getattr(self._adapter, "connection_generation", None)
         if generation is None:
@@ -653,6 +837,20 @@ class CodexRuntimeManager:
             raise CodexRuntimeError(
                 "invalid_arguments",
                 f"name must be at most {MAX_RUNTIME_NAME_LENGTH} characters.",
+            )
+        return normalized
+
+    @staticmethod
+    def _normalize_runtime_status(status: str | None) -> str | None:
+        if status is None:
+            return None
+        normalized = status.strip().lower()
+        if not normalized:
+            return None
+        if normalized not in {"ready", "detached", "error"}:
+            raise CodexRuntimeError(
+                "invalid_arguments",
+                "status must be one of: ready, detached, error.",
             )
         return normalized
 

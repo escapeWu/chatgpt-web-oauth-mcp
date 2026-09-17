@@ -116,7 +116,11 @@ class FakeAdapter:
         self.running = False
 
 
-def _manager(tmp_path: Path, adapter: FakeAdapter) -> CodexRuntimeManager:
+def _manager(
+    tmp_path: Path,
+    adapter: FakeAdapter,
+    **kwargs,
+) -> CodexRuntimeManager:
     return CodexRuntimeManager(
         state_dir=tmp_path / "state",
         workspace_root=tmp_path,
@@ -124,6 +128,7 @@ def _manager(tmp_path: Path, adapter: FakeAdapter) -> CodexRuntimeManager:
         default_timeout_ms=1000,
         max_timeout_ms=5000,
         output_bytes_cap=4096,
+        **kwargs,
     )
 
 
@@ -192,6 +197,132 @@ def test_close_preserves_runtime_id_and_reattaches_live_thread(tmp_path: Path) -
     assert resumed_by_thread["thread_id"] == thread_id
     assert resumed_by_thread["resume_mode"] == "reattached"
     assert [name for name, _ in adapter.calls].count("thread/resume") == 0
+
+
+def test_acquire_reuses_stable_named_runtime(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    adapter = FakeAdapter()
+    manager = _manager(tmp_path, adapter)
+
+    first = manager.acquire_runtime(
+        cwd=project,
+        sandbox="workspace-write",
+        name="plm-worker-01",
+    )
+    runtime_id = str(first["runtime_id"])
+    assert first["acquire_mode"] == "opened"
+    assert first["reused_existing"] is False
+
+    manager.close_runtime(runtime_id)
+    second = manager.acquire_runtime(
+        cwd=project,
+        sandbox="workspace-write",
+        name="plm-worker-01",
+    )
+    assert second["runtime_id"] == runtime_id
+    assert second["reused_existing"] is True
+    assert second["acquire_mode"] == "reattached"
+    assert [name for name, _ in adapter.calls].count("thread/start") == 1
+
+
+def test_runtime_is_gc_collected_after_idle_ttl(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    adapter = FakeAdapter()
+    clock = [1000.0]
+    monkeypatch.setattr(
+        "chatgpt_web_oauth_mcp.codex_runtime.manager.time.time",
+        lambda: clock[0],
+    )
+    manager = _manager(tmp_path, adapter, idle_ttl_seconds=8 * 60 * 60)
+
+    opened = manager.open_runtime(cwd=project, sandbox="workspace-write", name="worker")
+    runtime_id = str(opened["runtime_id"])
+    clock[0] += 8 * 60 * 60 - 1
+    before_gc = manager.info()
+    assert before_gc["runtime_count"] == 1
+    assert before_gc["ready_count"] == 1
+
+    clock[0] += 2
+    info = manager.info()
+    assert info["runtime_count"] == 0
+    assert info["gc"]["expired_collected_total"] == 1
+    with pytest.raises(Exception) as missing:
+        manager.runtime_status(runtime_id)
+    assert getattr(missing.value, "code", None) == "runtime_not_found"
+
+
+def test_capacity_lru_evicts_oldest_detached_runtime_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    adapter = FakeAdapter()
+    clock = [1000.0]
+    monkeypatch.setattr(
+        "chatgpt_web_oauth_mcp.codex_runtime.manager.time.time",
+        lambda: clock[0],
+    )
+    manager = _manager(
+        tmp_path,
+        adapter,
+        max_runtimes=2,
+        idle_ttl_seconds=24 * 60 * 60,
+    )
+
+    oldest = manager.open_runtime(cwd=project, sandbox="workspace-write", name="oldest")
+    manager.close_runtime(str(oldest["runtime_id"]))
+    clock[0] += 10
+    newer = manager.open_runtime(cwd=project, sandbox="workspace-write", name="newer")
+    manager.close_runtime(str(newer["runtime_id"]))
+    clock[0] += 10
+
+    newest = manager.open_runtime(cwd=project, sandbox="workspace-write", name="newest")
+    listed = manager.list_runtimes(name=None, cwd=None, status=None, offset=0, limit=10)
+    runtime_ids = {runtime["runtime_id"] for runtime in listed["runtimes"]}
+    assert {runtime["name"] for runtime in listed["runtimes"]} == {"newer", "newest"}
+    assert str(oldest["runtime_id"]) not in runtime_ids
+    assert str(newest["runtime_id"]) in runtime_ids
+    assert manager.info()["gc"]["lru_evicted_total"] == 1
+
+
+def test_capacity_lru_keeps_ready_runtime_even_when_it_is_older(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    adapter = FakeAdapter()
+    clock = [1000.0]
+    monkeypatch.setattr(
+        "chatgpt_web_oauth_mcp.codex_runtime.manager.time.time",
+        lambda: clock[0],
+    )
+    manager = _manager(
+        tmp_path,
+        adapter,
+        max_runtimes=2,
+        idle_ttl_seconds=24 * 60 * 60,
+    )
+
+    ready = manager.open_runtime(cwd=project, sandbox="workspace-write", name="ready-old")
+    clock[0] += 10
+    detached = manager.open_runtime(cwd=project, sandbox="workspace-write", name="detached-newer")
+    manager.close_runtime(str(detached["runtime_id"]))
+    clock[0] += 10
+
+    newest = manager.open_runtime(cwd=project, sandbox="workspace-write", name="newest")
+    listed = manager.list_runtimes(name=None, cwd=None, status=None, offset=0, limit=10)
+    runtime_ids = {runtime["runtime_id"] for runtime in listed["runtimes"]}
+    assert str(ready["runtime_id"]) in runtime_ids
+    assert str(detached["runtime_id"]) not in runtime_ids
+    assert str(newest["runtime_id"]) in runtime_ids
+    assert manager.info()["gc"]["lru_evicted_total"] == 1
 
 
 def test_resume_recreates_harness_only_thread_after_no_rollout(tmp_path: Path) -> None:

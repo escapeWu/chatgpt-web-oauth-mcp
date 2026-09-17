@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 
 
-SKILL_GUIDANCE_VERSION = "1.4"
+SKILL_GUIDANCE_VERSION = "1.5"
 SKILL_NAMESPACE = "chatgpt-web-oauth-mcp"
 SKILL_INDEX_URI = f"skill://{SKILL_NAMESPACE}/index"
 DELEGATE_USE_URI = f"skill://{SKILL_NAMESPACE}/delegate-use"
 FILE_USE_URI = f"skill://{SKILL_NAMESPACE}/file-use"
 PROCESS_USE_URI = f"skill://{SKILL_NAMESPACE}/process-use"
+RUNTIME_USE_URI = f"skill://{SKILL_NAMESPACE}/runtime-use"
 GIT_USE_URI = f"skill://{SKILL_NAMESPACE}/git-use"
 
 
@@ -299,6 +300,86 @@ Then consume one stream with `{"job_id":"job_...","stream":"stdout","cursor":0,"
 """
 
 
+RUNTIME_USE_GUIDE = """---
+name: runtime-use
+description: Manage persistent Codex runtimes with stable logical identities, reuse, bounded concurrency, and automatic detached-binding garbage collection. Load before the first codex_runtime_* or codex_mcp_* workflow.
+---
+
+# Runtime Use
+
+## Critical rules
+
+1. For recurring logical workers, use `codex_runtime_acquire` with a stable name such as `manager`, `plm-worker-01`, or `research-worker-02`. Do not create timestamp-suffixed names for every run unless a truly separate runtime is required.
+2. Use `codex_runtime_list` to discover existing bindings and `codex_runtime_resume` when a specific known runtime identity must be continued. Use `codex_runtime_open` only for intentionally new isolated runtimes.
+3. `codex_runtime_close` detaches the local binding; it does not archive or delete the upstream Codex thread. Any binding with no runtime use beyond the configured idle TTL is eligible for automatic GC, while capacity-driven LRU eviction is detached-only.
+4. Capacity LRU never evicts a `ready` runtime. Idle-TTL GC can collect a `ready` binding only after it has had no runtime operation for the full TTL. Check `server_info.codex_runtime` for `max_concurrency`, `max_runtimes`, `idle_ttl_seconds`, and GC counters instead of assuming limits.
+5. Runtime GC removes the local resumable binding only. If a binding has been collected, acquire the stable logical name again instead of assuming its old `runtime_id` remains valid.
+
+## Choose the tool
+
+| Need | Tool |
+| --- | --- |
+| Reuse or create a recurring named runtime | `codex_runtime_acquire` |
+| Discover existing bindings | `codex_runtime_list` |
+| Create a deliberately distinct runtime | `codex_runtime_open` |
+| Resume one known binding/thread | `codex_runtime_resume` |
+| Inspect one runtime | `codex_runtime_status` |
+| Detach a runtime for later reuse | `codex_runtime_close` |
+| Inspect or call MCPs connected through Codex | `codex_mcp_inventory`, `codex_mcp_call` |
+
+## Lifecycle
+
+Preferred recurring-worker flow:
+
+```text
+stable worker name
+      ↓
+codex_runtime_acquire
+      ↓
+reuse / resume existing binding, or open once
+      ↓
+work through codex_mcp_* as needed
+      ↓
+codex_runtime_close when the worker is idle
+      ↓
+reuse before TTL, otherwise acquire recreates it later
+```
+
+The server defaults to an 8-hour idle TTL for every binding. Capacity pressure additionally evicts the least-recently-used detached bindings first. Both policies are local binding lifecycle controls; neither performs destructive upstream thread deletion.
+
+## Stable naming
+
+- Names represent logical workers, not invocations. Prefer `manager` over `manager-20260917-1908`.
+- Keep `cwd` and sandbox policy stable for the same logical name. `codex_runtime_acquire` matches all three fields exactly.
+- Separate workers that may operate concurrently should have separate stable names, for example `plm-worker-01`, `plm-worker-02`, and `plm-worker-03`.
+- If a workflow intentionally needs a fresh isolated context, use `codex_runtime_open` and give it a distinct descriptive name.
+
+## Recover from errors
+
+| Error/status | Response |
+| --- | --- |
+| `runtime_not_found` | The binding may have been GC/LRU collected; acquire the stable logical name again. |
+| `runtime_not_active` | Resume the known runtime or acquire its stable logical name. |
+| `runtime_limit_reached` | Inspect runtime counts; capacity LRU does not evict ready runtimes, so release obsolete active work before retrying. |
+| `runtime_concurrency_limit` | Wait for one configured concurrent runtime operation to finish; do not create more runtimes to bypass the limit. |
+| metadata mismatch | Keep the original cwd/sandbox for that binding or intentionally acquire/open a distinct runtime. |
+
+## Minimal examples
+
+Recurring worker:
+
+```json
+{"cwd":"/home/user/workspace","name":"plm-worker-01","sandbox":"full-access"}
+```
+
+Discover it later:
+
+```json
+{"name":"plm-worker-01","status":"detached","limit":10}
+```
+"""
+
+
 GIT_USE_GUIDE = """---
 name: git-use
 description: Inspect repositories, review and create scoped commits, examine history, and manage Git worktrees safely. Load before the first Git workflow, especially before staging, committing, amending, creating/removing worktrees, or using force.
@@ -449,6 +530,30 @@ SKILL_INDEX = {
             "resource_uri": PROCESS_USE_URI,
         },
         {
+            "name": "runtime-use",
+            "description": (
+                "Stable Codex runtime acquisition/reuse with idle-TTL GC and "
+                "capacity-driven LRU eviction."
+            ),
+            "triggers": [
+                "Before the first codex_runtime_* or codex_mcp_* workflow",
+                "When recurring workers need persistent runtime identities",
+                "When diagnosing runtime capacity, GC, LRU, or concurrency behavior",
+            ],
+            "required_before_tools": [
+                "codex_runtime_acquire",
+                "codex_runtime_list",
+                "codex_runtime_open",
+                "codex_runtime_resume",
+                "codex_runtime_status",
+                "codex_runtime_close",
+                "codex_mcp_inventory",
+                "codex_mcp_call",
+            ],
+            "guide_tool": "get_runtime_use",
+            "resource_uri": RUNTIME_USE_URI,
+        },
+        {
             "name": "git-use",
             "description": (
                 "Safe repository inspection, scoped staging and commits, history analysis, "
@@ -503,6 +608,10 @@ def file_use_payload() -> dict[str, object]:
 
 def process_use_payload() -> dict[str, object]:
     return _guide_payload("process-use", PROCESS_USE_URI, PROCESS_USE_GUIDE)
+
+
+def runtime_use_payload() -> dict[str, object]:
+    return _guide_payload("runtime-use", RUNTIME_USE_URI, RUNTIME_USE_GUIDE)
 
 
 def git_use_payload() -> dict[str, object]:

@@ -15,6 +15,7 @@ from .config import (
     CODEX_COMMAND,
     CODEX_RUNTIME_DEFAULT_SANDBOX,
     CODEX_RUNTIME_DEFAULT_TIMEOUT_MS,
+    CODEX_RUNTIME_IDLE_TTL_SECONDS,
     CODEX_RUNTIME_MAX_CONCURRENCY,
     CODEX_RUNTIME_MAX_MESSAGE_BYTES,
     CODEX_RUNTIME_MAX_RUNTIMES,
@@ -95,6 +96,7 @@ codex_runtime_manager = CodexRuntimeManager(
     workspace_root=WORKSPACE_ROOT,
     max_concurrency=CODEX_RUNTIME_MAX_CONCURRENCY,
     max_runtimes=CODEX_RUNTIME_MAX_RUNTIMES,
+    idle_ttl_seconds=CODEX_RUNTIME_IDLE_TTL_SECONDS,
     startup_timeout_seconds=CODEX_RUNTIME_STARTUP_TIMEOUT_SECONDS,
     default_timeout_ms=CODEX_RUNTIME_DEFAULT_TIMEOUT_MS,
     max_timeout_ms=CODEX_RUNTIME_MAX_TIMEOUT_MS,
@@ -129,10 +131,11 @@ MCP_INSTRUCTIONS = (
     "persistent interactive TTY sessions, "
     "and git_* only inside a git repository. Use tmux_list/status/capture to observe a session and "
     "tmux_send for bounded text or key input; tmux capture output is a terminal snapshot, not a lossless log. "
-    "Use codex_runtime_open/resume/status/close for persistent Codex runtime bindings and "
+    "Use codex_runtime_acquire with a stable logical name for recurring workers; use codex_runtime_list "
+    "to discover reusable bindings, and open/resume/status/close only when their explicit lifecycle is needed. "
     "codex_mcp_inventory/codex_mcp_call for connected MCP access without starting a Codex LLM turn. "
     "Call get_skill_index to discover progressive-disclosure operating guides, then load the matching "
-    "get_file_use, get_process_use, or get_git_use "
+    "get_file_use, get_process_use, get_runtime_use, or get_git_use "
     "guide before the first workflow in that tool family. No taskboard tools are exposed."
 )
 

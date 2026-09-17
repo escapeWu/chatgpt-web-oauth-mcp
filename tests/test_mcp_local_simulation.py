@@ -154,6 +154,7 @@ def test_mcp_removed_delegate_and_task_tools_are_not_exposed(tmp_path: Path, mon
                 assert "get_skill_index" in names
                 assert "get_file_use" in names
                 assert "get_process_use" in names
+                assert "get_runtime_use" in names
                 assert "get_git_use" in names
                 for removed in {
                     "delegate_task",
@@ -186,12 +187,14 @@ def test_mcp_skill_tools_and_resources_end_to_end(tmp_path: Path, monkeypatch) -
                 assert [skill["name"] for skill in index["skills"]] == [
                     "file-use",
                     "process-use",
+                    "runtime-use",
                     "git-use",
                 ]
 
                 for tool_name, heading in [
                     ("get_file_use", "# File Use"),
                     ("get_process_use", "# Process Use"),
+                    ("get_runtime_use", "# Runtime Use"),
                     ("get_git_use", "# Git Use"),
                 ]:
                     guide = await _call_tool(session, tool_name, {})
@@ -204,6 +207,7 @@ def test_mcp_skill_tools_and_resources_end_to_end(tmp_path: Path, monkeypatch) -
                     "skill://chatgpt-web-oauth-mcp/index",
                     "skill://chatgpt-web-oauth-mcp/file-use",
                     "skill://chatgpt-web-oauth-mcp/process-use",
+                    "skill://chatgpt-web-oauth-mcp/runtime-use",
                     "skill://chatgpt-web-oauth-mcp/git-use",
                 } <= resource_uris
                 assert "skill://chatgpt-web-oauth-mcp/delegate-use" not in resource_uris
@@ -211,6 +215,7 @@ def test_mcp_skill_tools_and_resources_end_to_end(tmp_path: Path, monkeypatch) -
                 for uri, heading in [
                     ("skill://chatgpt-web-oauth-mcp/file-use", "# File Use"),
                     ("skill://chatgpt-web-oauth-mcp/process-use", "# Process Use"),
+                    ("skill://chatgpt-web-oauth-mcp/runtime-use", "# Runtime Use"),
                     ("skill://chatgpt-web-oauth-mcp/git-use", "# Git Use"),
                 ]:
                     guide_resource = await session.read_resource(uri)

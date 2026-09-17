@@ -25,7 +25,8 @@ def register_codex_runtime_tools(mcp: Any, ctx: ToolContext) -> dict[str, object
         description=(
             "Create a persistent Codex App Server thread for one cwd and sandbox policy. "
             "This starts the runtime thread but never starts a Codex LLM turn. "
-            "Omit sandbox to use the server-configured default policy."
+            "Omit sandbox to use the server-configured default policy. Prefer "
+            "codex_runtime_acquire for recurring logical workers so existing runtimes are reused."
         ),
     )
     def codex_runtime_open(
@@ -48,6 +49,89 @@ def register_codex_runtime_tools(mcp: Any, ctx: ToolContext) -> dict[str, object
         effective_sandbox = sandbox or cast(SandboxMode, ctx.codex_runtime_default_sandbox)
         return _invoke(
             lambda: manager.open_runtime(
+                cwd=resolve_cwd(cwd, ctx.workspace_root),
+                sandbox=effective_sandbox,
+                name=name,
+            )
+        )
+
+    @mcp.tool(
+        name="codex_runtime_list",
+        title="List Codex Runtimes",
+        annotations=READ_ONLY_TOOL,
+        description=(
+            "List persisted Codex runtime bindings, newest-used first. Optional exact name, cwd, "
+            "and status filters help callers find reusable runtimes before creating new ones. "
+            "Expired idle bindings are garbage-collected before the list is returned."
+        ),
+    )
+    def codex_runtime_list(
+        name: Annotated[
+            str | None,
+            Field(description="Optional exact logical runtime name."),
+        ] = None,
+        cwd: Annotated[
+            str | None,
+            Field(description="Optional exact bound working directory."),
+        ] = None,
+        status: Annotated[
+            str | None,
+            Field(description="Optional status filter: ready, detached, or error."),
+        ] = None,
+        offset: Annotated[
+            int,
+            Field(ge=0, description="Zero-based result offset."),
+        ] = 0,
+        limit: Annotated[
+            int,
+            Field(ge=1, le=100, description="Maximum number of runtimes to return."),
+        ] = 50,
+    ) -> dict[str, object]:
+        manager = _manager_or_error(ctx)
+        if isinstance(manager, dict):
+            return manager
+        resolved_cwd = resolve_cwd(cwd, ctx.workspace_root) if cwd else None
+        payload = _invoke(
+            lambda: manager.list_runtimes(
+                name=name,
+                cwd=resolved_cwd,
+                status=status,
+                offset=offset,
+                limit=limit,
+            )
+        )
+        return _bounded(payload, ctx.tool_output_token_budget, fields=("runtimes",))
+
+    @mcp.tool(
+        name="codex_runtime_acquire",
+        title="Acquire Codex Runtime",
+        annotations=LOCAL_STATE_TOOL,
+        description=(
+            "Acquire a stable logical Codex runtime by exact name, cwd, and sandbox. Reuse/resume "
+            "the most recently used matching binding when one exists; otherwise create it. "
+            "Use stable names such as manager or plm-worker-01 instead of per-run timestamp names."
+        ),
+    )
+    def codex_runtime_acquire(
+        cwd: Annotated[
+            str,
+            Field(description="Directory to bind to this logical runtime."),
+        ],
+        name: Annotated[
+            str,
+            Field(description="Stable logical runtime name used for future reuse."),
+        ],
+        sandbox: Annotated[
+            SandboxMode | None,
+            Field(description="Sandbox policy; omit for the server-configured default."),
+        ] = None,
+    ) -> dict[str, object]:
+        manager = _manager_or_error(ctx)
+        if isinstance(manager, dict):
+            return manager
+        effective_sandbox = sandbox or cast(SandboxMode, ctx.codex_runtime_default_sandbox)
+        return _invoke(
+            lambda: manager.acquire_runtime(
                 cwd=resolve_cwd(cwd, ctx.workspace_root),
                 sandbox=effective_sandbox,
                 name=name,
@@ -121,7 +205,7 @@ def register_codex_runtime_tools(mcp: Any, ctx: ToolContext) -> dict[str, object
         description=(
             "Mark a local Codex runtime binding detached while preserving its runtime_id and Codex thread. "
             "This is detach-only: it does not call thread/delete or thread/archive, and the same runtime_id "
-            "can be resumed later."
+            "can be resumed later until the detached binding is reclaimed by idle-TTL GC or capacity LRU."
         ),
     )
     def codex_runtime_close(
@@ -214,6 +298,8 @@ def register_codex_runtime_tools(mcp: Any, ctx: ToolContext) -> dict[str, object
 
     return {
         "codex_runtime_open": codex_runtime_open,
+        "codex_runtime_list": codex_runtime_list,
+        "codex_runtime_acquire": codex_runtime_acquire,
         "codex_runtime_resume": codex_runtime_resume,
         "codex_runtime_status": codex_runtime_status,
         "codex_runtime_close": codex_runtime_close,
