@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -603,6 +603,7 @@ class CodexRuntimeManager:
         tool: str,
         arguments: dict[str, Any] | None,
         meta: dict[str, Any] | None,
+        interaction_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> dict[str, object]:
         binding = self._active_binding(runtime_id)
         normalized_server = self._normalize_required_name(server, "server")
@@ -611,14 +612,17 @@ class CodexRuntimeManager:
             raise CodexRuntimeError("invalid_arguments", "arguments must be a JSON object or null.")
         if meta is not None and not isinstance(meta, dict):
             raise CodexRuntimeError("invalid_arguments", "_meta must be a JSON object or null.")
+        call_kwargs: dict[str, Any] = {
+            "thread_id": binding.thread_id,
+            "server": normalized_server,
+            "tool": normalized_tool,
+            "arguments": dict(arguments or {}),
+            "meta": dict(meta) if meta is not None else None,
+        }
+        if interaction_handler is not None:
+            call_kwargs["interaction_handler"] = interaction_handler
         with self._request_slot():
-            result = self._adapter.mcp_call(
-                thread_id=binding.thread_id,
-                server=normalized_server,
-                tool=normalized_tool,
-                arguments=dict(arguments or {}),
-                meta=dict(meta) if meta is not None else None,
-            )
+            result = self._adapter.mcp_call(**call_kwargs)
         self._touch(runtime_id)
         is_error = result.get("isError")
         if is_error not in {True, False, None}:

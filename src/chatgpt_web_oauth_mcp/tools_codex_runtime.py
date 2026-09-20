@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from typing import Annotated, Any, cast
 
+from fastmcp import Context
 from pydantic import Field
 
 from .codex_runtime.errors import CodexRuntimeError
@@ -13,6 +15,7 @@ from .tool_context import OPEN_WORLD_WRITE_TOOL, READ_ONLY_TOOL, LOCAL_STATE_TOO
 
 
 _MAX_TEXT_BYTES = 256 * 1024
+_ELICITATION_TIMEOUT_SECONDS = 285.0
 
 
 def register_codex_runtime_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
@@ -266,13 +269,15 @@ def register_codex_runtime_tools(mcp: Any, ctx: ToolContext) -> dict[str, object
         description=(
             "Call one MCP tool connected to the selected Codex thread without starting turn/start. "
             "The downstream content, structuredContent, isError, and _meta fields are retained. "
-            "Approval, elicitation, and auth-required requests are never silently auto-approved."
+            "Supported form elicitations are forwarded to the current MCP client; no request is "
+            "silently auto-approved."
         ),
     )
-    def codex_mcp_call(
+    async def codex_mcp_call(
         runtime_id: Annotated[str, Field(description="Runtime identity whose Codex thread is used.")],
         server: Annotated[str, Field(description="Connected Codex MCP server name.")],
         tool: Annotated[str, Field(description="Connected MCP tool name.")],
+        context: Context,
         arguments: Annotated[
             dict[str, Any] | None,
             Field(description="JSON object passed to the downstream MCP tool."),
@@ -285,14 +290,31 @@ def register_codex_runtime_tools(mcp: Any, ctx: ToolContext) -> dict[str, object
         manager = _manager_or_error(ctx)
         if isinstance(manager, dict):
             return manager
-        payload = _invoke(
+        event_loop = asyncio.get_running_loop()
+        outer_session = context.session
+        outer_request_id = context.request_id
+
+        def handle_interaction(interaction: dict[str, Any]) -> dict[str, Any]:
+            future = asyncio.run_coroutine_threadsafe(
+                _bridge_elicitation(outer_session, outer_request_id, interaction),
+                event_loop,
+            )
+            try:
+                return future.result(timeout=_ELICITATION_TIMEOUT_SECONDS)
+            except Exception:
+                future.cancel()
+                raise
+
+        payload = await asyncio.to_thread(
+            _invoke,
             lambda: manager.mcp_call(
                 runtime_id=runtime_id,
                 server=server,
                 tool=tool,
                 arguments=arguments,
                 meta=_meta,
-            )
+                interaction_handler=handle_interaction,
+            ),
         )
         return _bounded(payload, ctx.tool_output_token_budget, fields=("content", "structuredContent", "_meta"))
 
@@ -306,6 +328,37 @@ def register_codex_runtime_tools(mcp: Any, ctx: ToolContext) -> dict[str, object
         "codex_mcp_inventory": codex_mcp_inventory,
         "codex_mcp_call": codex_mcp_call,
     }
+
+
+async def _bridge_elicitation(
+    session: Any,
+    request_id: str,
+    interaction: dict[str, Any],
+) -> dict[str, Any]:
+    params = interaction.get("params")
+    if not isinstance(params, dict):
+        return {"action": "cancel", "content": None, "_meta": None}
+    mode = params.get("mode", "form")
+    message = params.get("message")
+    requested_schema = params.get("requestedSchema")
+    if (
+        mode not in {"form", "openai/form", "openaiForm"}
+        or not isinstance(message, str)
+        or not isinstance(requested_schema, dict)
+    ):
+        return {"action": "cancel", "content": None, "_meta": None}
+
+    # The session API preserves the upstream JSON Schema; Context.elicit expects a Python type.
+    result = await session.elicit_form(
+        message=message,
+        requestedSchema=requested_schema,
+        related_request_id=request_id,
+    )
+    action = getattr(result, "action", None)
+    if action not in {"accept", "decline", "cancel"}:
+        raise ValueError("Outer MCP client returned an unsupported elicitation action.")
+    content = getattr(result, "content", None) if action == "accept" else None
+    return {"action": action, "content": content, "_meta": None}
 
 
 def _manager_or_error(ctx: ToolContext) -> Any:

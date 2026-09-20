@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 import json
 import os
@@ -27,13 +27,18 @@ from .models import SandboxMode, sandbox_policy, thread_sandbox
 
 
 DEFAULT_STARTUP_TIMEOUT_SECONDS = 15.0
+DEFAULT_MCP_CALL_TIMEOUT_SECONDS = 300.0
 DEFAULT_MAX_MESSAGE_BYTES = 8 * 1024 * 1024
+
+ServerRequestHandler = Callable[[dict[str, Any]], dict[str, Any]]
 
 
 @dataclass
 class _PendingRequest:
     request_id: int
     method: str
+    params: dict[str, Any]
+    server_request_handler: ServerRequestHandler | None = None
     event: threading.Event = field(default_factory=threading.Event)
     result: Any = None
     error: BaseException | None = None
@@ -156,7 +161,10 @@ class CodexAppServerAdapter:
                             "name": "chatgpt-web-oauth-mcp",
                             "version": "0.1.0",
                         },
-                        "capabilities": {},
+                        "capabilities": {
+                            "extensions": {"openai/form": {}},
+                            "mcpServerOpenaiFormElicitation": True,
+                        },
                     },
                     timeout_seconds=self._startup_timeout_seconds,
                 )
@@ -282,6 +290,7 @@ class CodexAppServerAdapter:
         tool: str,
         arguments: dict[str, Any],
         meta: dict[str, Any] | None,
+        interaction_handler: ServerRequestHandler | None = None,
     ) -> dict[str, Any]:
         self.start()
         params: dict[str, Any] = {
@@ -295,7 +304,8 @@ class CodexAppServerAdapter:
         result = self._request_raw(
             "mcpServer/tool/call",
             params,
-            timeout_seconds=self._startup_timeout_seconds,
+            timeout_seconds=DEFAULT_MCP_CALL_TIMEOUT_SECONDS,
+            server_request_handler=interaction_handler,
         )
         return _require_object(result, "mcpServer/tool/call")
 
@@ -326,18 +336,40 @@ class CodexAppServerAdapter:
             else:
                 self._capabilities.add(method)
 
-    def _request_raw(self, method: str, params: dict[str, Any], *, timeout_seconds: float) -> Any:
-        pending = self._submit_request(method, params)
+    def _request_raw(
+        self,
+        method: str,
+        params: dict[str, Any],
+        *,
+        timeout_seconds: float,
+        server_request_handler: ServerRequestHandler | None = None,
+    ) -> Any:
+        pending = self._submit_request(
+            method,
+            params,
+            server_request_handler=server_request_handler,
+        )
         return self._wait_pending(pending, timeout_seconds=timeout_seconds)
 
-    def _submit_request(self, method: str, params: dict[str, Any]) -> _PendingRequest:
+    def _submit_request(
+        self,
+        method: str,
+        params: dict[str, Any],
+        *,
+        server_request_handler: ServerRequestHandler | None = None,
+    ) -> _PendingRequest:
         process = self._process
         if process is None or process.poll() is not None or process.stdin is None:
             raise AppServerUnavailableError()
         with self._pending_lock:
             request_id = self._next_request_id
             self._next_request_id += 1
-            pending = _PendingRequest(request_id=request_id, method=method)
+            pending = _PendingRequest(
+                request_id=request_id,
+                method=method,
+                params=dict(params),
+                server_request_handler=server_request_handler,
+            )
             self._pending[request_id] = pending
         try:
             self._send_message(
@@ -411,7 +443,7 @@ class CodexAppServerAdapter:
                 if "id" in message and ("result" in message or "error" in message):
                     self._resolve_response(message)
                 elif "id" in message and "method" in message:
-                    self._reject_server_request(message)
+                    self._handle_server_request(message)
         finally:
             if protocol_failure:
                 with self._lifecycle_lock:
@@ -444,7 +476,13 @@ class CodexAppServerAdapter:
             pending = self._pending.get(request_id)
         if pending is None:
             return
-        if "error" in message:
+        bridge_failed = any("bridge_error" in interaction for interaction in pending.interactions)
+        if bridge_failed:
+            pending.error = AppServerInteractionRequiredError(
+                pending.method,
+                pending.interactions,
+            )
+        elif "error" in message:
             error_value = message.get("error")
             error_code: int | str | None = None
             error_message = "Codex App Server returned an RPC error."
@@ -470,24 +508,83 @@ class CodexAppServerAdapter:
             pending.result = message.get("result")
         pending.event.set()
 
-    def _reject_server_request(self, message: dict[str, Any]) -> None:
+    def _handle_server_request(self, message: dict[str, Any]) -> None:
         method = message.get("method")
-        request_id = message.get("id")
         interaction = {
             "method": method if isinstance(method, str) else "unknown",
-            "request_id": request_id,
+            "request_id": message.get("id"),
+            "params": message.get("params"),
         }
+        matches = self._matching_pending_calls(message)
         with self._pending_lock:
-            pending = min(self._pending.values(), key=lambda item: item.request_id, default=None)
-            if pending is not None:
-                pending.interactions.append(interaction)
+            for pending in matches:
+                pending.interactions.append(dict(interaction))
+            routed = matches[0] if len(matches) == 1 else None
+            if routed is not None:
+                interaction = routed.interactions[-1]
+
+        if method != "mcpServer/elicitation/request":
+            self._reject_server_request(
+                message,
+                code=-32601,
+                reason=f"Unsupported Codex App Server request: {interaction['method']}.",
+            )
+            return
+        if routed is None or routed.server_request_handler is None:
+            self._reject_server_request(
+                message,
+                code=-32001,
+                reason="Elicitation could not be correlated to exactly one active MCP tool call.",
+            )
+            return
+
+        try:
+            response = _normalize_elicitation_response(
+                routed.server_request_handler(interaction)
+            )
+            interaction["action"] = response["action"]
+        except Exception:
+            interaction["bridge_error"] = "Outer MCP elicitation failed or timed out."
+            response = {"action": "cancel", "content": None, "_meta": None}
         self._send_message(
             {
                 "jsonrpc": "2.0",
-                "id": request_id,
+                "id": message.get("id"),
+                "result": response,
+            }
+        )
+
+    def _matching_pending_calls(self, message: dict[str, Any]) -> list[_PendingRequest]:
+        params = message.get("params")
+        if not isinstance(params, dict):
+            return []
+        thread_id = params.get("threadId")
+        server_name = params.get("serverName")
+        if not isinstance(thread_id, str) or not isinstance(server_name, str):
+            return []
+        with self._pending_lock:
+            return [
+                pending
+                for pending in self._pending.values()
+                if pending.method == "mcpServer/tool/call"
+                and pending.params.get("threadId") == thread_id
+                and pending.params.get("server") == server_name
+            ]
+
+    def _reject_server_request(
+        self,
+        message: dict[str, Any],
+        *,
+        code: int,
+        reason: str,
+    ) -> None:
+        self._send_message(
+            {
+                "jsonrpc": "2.0",
+                "id": message.get("id"),
                 "error": {
-                    "code": -32001,
-                    "message": "Approval or elicitation is required; this runtime never auto-approves.",
+                    "code": code,
+                    "message": reason,
                 },
             }
         )
@@ -556,6 +653,21 @@ def _require_object(value: Any, method: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise AppServerProtocolError(f"Codex App Server returned a non-object result for {method}.")
     return value
+
+
+def _normalize_elicitation_response(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("Elicitation handler returned a non-object response.")
+    action = value.get("action")
+    if action not in {"accept", "decline", "cancel"}:
+        raise ValueError("Elicitation handler returned an unsupported action.")
+    content = value.get("content") if action == "accept" else None
+    if content is not None and not isinstance(content, dict):
+        raise ValueError("Accepted elicitation content must be an object or null.")
+    meta = value.get("_meta")
+    if meta is not None and not isinstance(meta, dict):
+        raise ValueError("Elicitation response _meta must be an object or null.")
+    return {"action": action, "content": content, "_meta": meta}
 
 
 def _bounded_error_data(value: Any) -> Any:

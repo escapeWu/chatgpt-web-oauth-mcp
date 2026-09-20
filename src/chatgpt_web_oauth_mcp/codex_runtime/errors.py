@@ -83,11 +83,11 @@ class AppServerInteractionRequiredError(CodexRuntimeError):
     def __init__(self, method: str, interactions: list[Mapping[str, Any]]) -> None:
         super().__init__(
             "interaction_required",
-            "Codex requested approval or elicitation; the runtime does not auto-approve it.",
+            "Codex requested an interaction that could not be completed safely.",
             details={
                 "method": method,
                 "interactions": [dict(item) for item in interactions],
-                "recovery": "Resolve the request in a client that can review it, then retry.",
+                "recovery": "Retry from an MCP client that supports the requested elicitation.",
             },
         )
 
