@@ -119,6 +119,18 @@ def test_install_launchd_forwards_delegate_harness_env() -> None:
         assert f'"{name}"' in env_keys_block
 
 
+def test_install_launchd_forwards_cua_approval_env() -> None:
+    source = (Path(__file__).parents[1] / "scripts" / "install-launchd.sh").read_text(
+        encoding="utf-8"
+    )
+    env_keys_start = source.index("env_keys = {")
+    env_keys_end = source.index("}\nconfig =", env_keys_start)
+    env_keys_block = source[env_keys_start:env_keys_end]
+
+    assert '"CHATGPT_MCP_CODEX_RUNTIME_CUA_APPROVAL_MODE"' in env_keys_block
+    assert '"CHATGPT_MCP_CODEX_RUNTIME_CUA_ALLOWED_APPS"' in env_keys_block
+
+
 def test_build_cloudflared_launch_agent_uses_named_tunnel_when_present(tmp_path: Path) -> None:
     config = _config(tmp_path)
 

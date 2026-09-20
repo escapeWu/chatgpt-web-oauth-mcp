@@ -73,6 +73,12 @@ Use the narrowest tool that matches the task:
 4. Use `codex_runtime_*` and `codex_mcp_*` when persistent Codex runtime or connected MCP access is required.
 5. Verify results directly before declaring completion.
 
+Computer Use approval defaults to `interactive`. For the restricted local prototype from
+[Issue #12](https://github.com/escapeWu/chatgpt-web-oauth-mcp/issues/12), set
+`CHATGPT_MCP_CODEX_RUNTIME_CUA_APPROVAL_MODE=prototype` and provide exact app bundle IDs in
+`CHATGPT_MCP_CODEX_RUNTIME_CUA_ALLOWED_APPS`. This bypasses nested elicitation only for the
+`cua_repl` `get_app_state` app-access gate; later side-effect confirmations remain interactive.
+
 ## Requirements
 
 - Python 3.11 or newer
@@ -357,6 +363,8 @@ Batch `read_text`, `search`, and `run_command` calls use one shared response bud
 | `CHATGPT_MCP_JOB_OUTPUT_TOKEN_BUDGET` | no | Inherits the global tool budget |
 | `CHATGPT_MCP_RUN_CAPTURE_MAX_BYTES` | no | `1048576` bytes |
 | `CHATGPT_MCP_CODEX_COMMAND` | no | `codex` |
+| `CHATGPT_MCP_CODEX_RUNTIME_CUA_APPROVAL_MODE` | no | `interactive`; also supports restricted `prototype` and `deny` |
+| `CHATGPT_MCP_CODEX_RUNTIME_CUA_ALLOWED_APPS` | no | Empty comma-separated exact app bundle-ID allowlist |
 | `CHATGPT_MCP_PI_COMMAND` | no | `pi` |
 | `CHATGPT_MCP_COMMAND_TIMEOUT` | no | `120` seconds |
 | `CHATGPT_MCP_DEBUG_MCP_LOGGING` | no | `0` |

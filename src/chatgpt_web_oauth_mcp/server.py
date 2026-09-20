@@ -13,6 +13,8 @@ from .config import (
     AUTH_MODE,
     AUTH_TOKEN,
     CODEX_COMMAND,
+    CODEX_RUNTIME_CUA_ALLOWED_APPS,
+    CODEX_RUNTIME_CUA_APPROVAL_MODE,
     CODEX_RUNTIME_DEFAULT_SANDBOX,
     CODEX_RUNTIME_DEFAULT_TIMEOUT_MS,
     CODEX_RUNTIME_IDLE_TTL_SECONDS,
@@ -117,8 +119,9 @@ MCP_INSTRUCTIONS = (
     "Architecture: ChatGPT Web is the architect/manager/reviewer; this local MCP server exposes "
     "scoped local tools; codex_runtime_* provides a persistent Codex App Server runtime, "
     "uses command/exec for argv execution, and never starts a Codex LLM turn. "
-    "Approval and form elicitation requests are bridged to the current MCP client when supported; "
-    "all other server requests fail closed and nothing is auto-approved. "
+    "Approval and form elicitation requests are bridged to the current MCP client when supported. "
+    "Only an explicitly configured prototype policy auto-approves exact allowlisted Computer Use "
+    "app-access requests; all other server requests remain interactive or fail closed. "
     "Use direct tools for repo inspection, planning, patching, commands, git checks, and verification. "
     "Use search/read_text for focused or batched discovery and reading, apply_patch/write_file for edits, "
     "env_snapshot/env_diff for read-only runtime diagnostics. Before edits or reviews, use "

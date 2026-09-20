@@ -118,6 +118,15 @@ class ToolContext:
         return str(self._get("CODEX_RUNTIME_DEFAULT_SANDBOX", "workspace-write"))
 
     @property
+    def codex_runtime_cua_approval_mode(self) -> str:
+        return str(self._get("CODEX_RUNTIME_CUA_APPROVAL_MODE", "interactive"))
+
+    @property
+    def codex_runtime_cua_allowed_apps(self) -> frozenset[str]:
+        value = self._get("CODEX_RUNTIME_CUA_ALLOWED_APPS", ())
+        return frozenset(str(item) for item in value)
+
+    @property
     def pi_command(self) -> str | None:
         return self._get("PI_COMMAND")
 

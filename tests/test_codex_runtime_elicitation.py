@@ -16,6 +16,7 @@ from chatgpt_web_oauth_mcp.codex_runtime.app_server import CodexAppServerAdapter
 from chatgpt_web_oauth_mcp.codex_runtime.errors import AppServerInteractionRequiredError
 from chatgpt_web_oauth_mcp.tools_codex_runtime import (
     _bridge_elicitation,
+    _computer_use_approval_response,
     register_codex_runtime_tools,
 )
 
@@ -160,6 +161,30 @@ class _FakeSession:
         return SimpleNamespace(action=self.action, content=self.content)
 
 
+def _cua_interaction() -> dict[str, object]:
+    return {
+        "request_id": 44,
+        "method": "mcpServer/elicitation/request",
+        "params": {
+            "threadId": "thread-1",
+            "turnId": None,
+            "serverName": "cua_repl",
+            "mode": "form",
+            "message": 'Allow Computer Use to use "Google Chrome"?',
+            "requestedSchema": {"type": "object", "properties": {}},
+            "_meta": {
+                "codex_approval_kind": "mcp_tool_call",
+                "connector_id": "computer-use",
+                "connector_name": "Computer Use",
+                "persist": ["session", "always"],
+                "riskLevel": "high",
+                "tool_name": "get_app_state",
+                "tool_params": {"app": "com.google.Chrome"},
+            },
+        },
+    }
+
+
 @pytest.mark.parametrize("action", ["accept", "decline", "cancel"])
 def test_bridge_elicitation_forwards_outer_client_action(action: str) -> None:
     content = {"approved": True} if action == "accept" else None
@@ -297,6 +322,157 @@ def test_registered_tool_bridges_current_fastmcp_session() -> None:
                 },
             )
         ]
+
+    asyncio.run(run())
+
+
+def test_prototype_auto_approves_exact_allowlisted_app_access() -> None:
+    response = _computer_use_approval_response(
+        _cua_interaction(),
+        approval_mode="prototype",
+        allowed_apps={"com.google.Chrome"},
+    )
+
+    assert response == {
+        "action": "accept",
+        "content": {},
+        "_meta": {"persist": "always"},
+    }
+
+
+def test_prototype_uses_session_when_always_is_not_offered() -> None:
+    interaction = _cua_interaction()
+    interaction["params"]["_meta"]["persist"] = ["session"]
+
+    response = _computer_use_approval_response(
+        interaction,
+        approval_mode="prototype",
+        allowed_apps={"com.google.Chrome"},
+    )
+
+    assert response == {
+        "action": "accept",
+        "content": {},
+        "_meta": {"persist": "session"},
+    }
+
+
+def test_interactive_and_deny_modes_remain_bounded() -> None:
+    interaction = _cua_interaction()
+    assert (
+        _computer_use_approval_response(
+            interaction,
+            approval_mode="interactive",
+            allowed_apps={"com.google.Chrome"},
+        )
+        is None
+    )
+
+    denied = _computer_use_approval_response(
+        interaction,
+        approval_mode="deny",
+        allowed_apps={"com.google.Chrome"},
+    )
+    assert denied == {"action": "decline", "content": None, "_meta": None}
+
+    interaction["params"]["_meta"]["connector_id"] = "calendar"
+    assert (
+        _computer_use_approval_response(
+            interaction,
+            approval_mode="deny",
+            allowed_apps={"com.google.Chrome"},
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("method",), "future/request"),
+        (("params", "serverName"), "node_repl"),
+        (("params", "turnId"), "turn-1"),
+        (("params", "mode"), "url"),
+        (("params", "requestedSchema"), {"type": "object", "properties": {"ok": {}}}),
+        (("params", "_meta", "codex_approval_kind"), "browser_auth"),
+        (("params", "_meta", "connector_id"), "browser-use"),
+        (("params", "_meta", "tool_name"), "send_message"),
+        (("params", "_meta", "riskLevel"), "critical"),
+        (
+            ("params", "_meta", "tool_params"),
+            {"app": "com.google.Chrome", "recipient": "someone"},
+        ),
+        (("params", "_meta", "tool_params"), {"app": "com.tencent.xinWeChat"}),
+        (("params", "_meta", "persist"), ["session", "session"]),
+        (("params", "_meta", "persist"), ["session", "future"]),
+        (("params", "_meta"), None),
+    ],
+)
+def test_prototype_rejects_any_contract_mismatch(
+    path: tuple[str, ...],
+    value: object,
+) -> None:
+    interaction = _cua_interaction()
+    target = interaction
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+
+    assert (
+        _computer_use_approval_response(
+            interaction,
+            approval_mode="prototype",
+            allowed_apps={"com.google.Chrome"},
+        )
+        is None
+    )
+
+
+def test_registered_tool_applies_prototype_without_outer_elicitation() -> None:
+    class FakeManager:
+        def mcp_call(self, **kwargs):
+            response = kwargs["interaction_handler"](_cua_interaction())
+            return {
+                "success": True,
+                "runtime_id": kwargs["runtime_id"],
+                "thread_id": "thread-1",
+                "server": kwargs["server"],
+                "tool": kwargs["tool"],
+                "content": [],
+                "structuredContent": response,
+                "isError": False,
+                "_meta": None,
+            }
+
+    async def run() -> None:
+        mcp = FastMCP("prototype-cua-approval-test")
+        register_codex_runtime_tools(
+            mcp,
+            SimpleNamespace(
+                codex_runtime_manager=FakeManager(),
+                codex_runtime_cua_approval_mode="prototype",
+                codex_runtime_cua_allowed_apps=frozenset({"com.google.Chrome"}),
+                tool_output_token_budget=8_000,
+            ),
+        )
+        client = Client(mcp)
+        async with client:
+            result = await client.call_tool(
+                "codex_mcp_call",
+                {
+                    "runtime_id": "runtime-1",
+                    "server": "cua_repl",
+                    "tool": "js",
+                    "arguments": {"code": "await cua.getApp('Google Chrome')"},
+                },
+            )
+
+        assert result.is_error is False
+        assert result.structured_content["structuredContent"] == {
+            "action": "accept",
+            "content": {},
+            "_meta": {"persist": "always"},
+        }
 
     asyncio.run(run())
 

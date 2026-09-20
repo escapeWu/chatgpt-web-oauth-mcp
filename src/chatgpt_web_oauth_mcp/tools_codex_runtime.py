@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from typing import Annotated, Any, cast
 
 from fastmcp import Context
@@ -269,8 +269,9 @@ def register_codex_runtime_tools(mcp: Any, ctx: ToolContext) -> dict[str, object
         description=(
             "Call one MCP tool connected to the selected Codex thread without starting turn/start. "
             "The downstream content, structuredContent, isError, and _meta fields are retained. "
-            "Supported form elicitations are forwarded to the current MCP client; no request is "
-            "silently auto-approved."
+            "Form elicitations are normally forwarded to the current MCP client. An explicitly "
+            "configured prototype policy can auto-approve only exact allowlisted Computer Use "
+            "app-access requests."
         ),
     )
     async def codex_mcp_call(
@@ -293,8 +294,17 @@ def register_codex_runtime_tools(mcp: Any, ctx: ToolContext) -> dict[str, object
         event_loop = asyncio.get_running_loop()
         outer_session = context.session
         outer_request_id = context.request_id
+        approval_mode = getattr(ctx, "codex_runtime_cua_approval_mode", "interactive")
+        allowed_apps = frozenset(getattr(ctx, "codex_runtime_cua_allowed_apps", ()))
 
         def handle_interaction(interaction: dict[str, Any]) -> dict[str, Any]:
+            policy_response = _computer_use_approval_response(
+                interaction,
+                approval_mode=approval_mode,
+                allowed_apps=allowed_apps,
+            )
+            if policy_response is not None:
+                return policy_response
             future = asyncio.run_coroutine_threadsafe(
                 _bridge_elicitation(outer_session, outer_request_id, interaction),
                 event_loop,
@@ -327,6 +337,66 @@ def register_codex_runtime_tools(mcp: Any, ctx: ToolContext) -> dict[str, object
         "codex_runtime_close": codex_runtime_close,
         "codex_mcp_inventory": codex_mcp_inventory,
         "codex_mcp_call": codex_mcp_call,
+    }
+
+
+def _computer_use_approval_response(
+    interaction: dict[str, Any],
+    *,
+    approval_mode: str,
+    allowed_apps: Collection[str],
+) -> dict[str, Any] | None:
+    if approval_mode == "interactive":
+        return None
+    if interaction.get("method") != "mcpServer/elicitation/request":
+        return None
+    params = interaction.get("params")
+    if not isinstance(params, dict):
+        return None
+    meta = params.get("_meta")
+    if not isinstance(meta, dict) or meta.get("connector_id") != "computer-use":
+        return None
+    if approval_mode == "deny":
+        return {"action": "decline", "content": None, "_meta": None}
+    if approval_mode != "prototype":
+        return None
+
+    requested_schema = params.get("requestedSchema")
+    tool_params = meta.get("tool_params")
+    if (
+        params.get("serverName") != "cua_repl"
+        or params.get("turnId") is not None
+        or not isinstance(params.get("threadId"), str)
+        or not params["threadId"]
+        or params.get("mode", "form") != "form"
+        or requested_schema != {"type": "object", "properties": {}}
+        or meta.get("codex_approval_kind") != "mcp_tool_call"
+        or meta.get("tool_name") != "get_app_state"
+        or meta.get("riskLevel") not in {"low", "high"}
+        or not isinstance(tool_params, dict)
+        or set(tool_params) != {"app"}
+    ):
+        return None
+    app = tool_params.get("app")
+    if not isinstance(app, str) or app not in allowed_apps:
+        return None
+
+    persist = meta.get("persist")
+    if (
+        not isinstance(persist, list)
+        or not persist
+        or not all(isinstance(item, str) for item in persist)
+        or len(set(persist)) != len(persist)
+        or not set(persist).issubset({"session", "always"})
+    ):
+        return None
+    persistence = "always" if "always" in persist else "session" if "session" in persist else None
+    if persistence is None:
+        return None
+    return {
+        "action": "accept",
+        "content": {},
+        "_meta": {"persist": persistence},
     }
 
 

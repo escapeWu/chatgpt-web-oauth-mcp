@@ -26,7 +26,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from .codex_runtime.models import SandboxMode, validate_sandbox
+from .codex_runtime.models import SandboxMode, validate_cua_approval_mode, validate_sandbox
 from .response_budget import DEFAULT_TOOL_OUTPUT_TOKEN_BUDGET, resolve_token_budget
 
 
@@ -75,6 +75,16 @@ OAUTH_TOKEN_TTL_SECONDS = int(os.environ.get("CHATGPT_MCP_OAUTH_TOKEN_TTL_SECOND
 CODEX_COMMAND = os.environ.get("CHATGPT_MCP_CODEX_COMMAND", "codex").strip()
 CODEX_RUNTIME_DEFAULT_SANDBOX: SandboxMode = validate_sandbox(
     os.environ.get("CHATGPT_MCP_CODEX_RUNTIME_DEFAULT_SANDBOX", "workspace-write").strip().lower()
+)
+CODEX_RUNTIME_CUA_APPROVAL_MODE = validate_cua_approval_mode(
+    os.environ.get("CHATGPT_MCP_CODEX_RUNTIME_CUA_APPROVAL_MODE", "interactive").strip().lower()
+)
+CODEX_RUNTIME_CUA_ALLOWED_APPS = tuple(
+    dict.fromkeys(
+        app.strip()
+        for app in os.environ.get("CHATGPT_MCP_CODEX_RUNTIME_CUA_ALLOWED_APPS", "").split(",")
+        if app.strip()
+    )
 )
 CODEX_RUNTIME_MAX_CONCURRENCY = _positive_env_int(
     "CHATGPT_MCP_CODEX_RUNTIME_MAX_CONCURRENCY",

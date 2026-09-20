@@ -13,6 +13,8 @@ def _call() -> dict:
 
 def test_server_info_reports_metadata_and_tools() -> None:
     assert server._tool_context.codex_runtime_default_sandbox == config.CODEX_RUNTIME_DEFAULT_SANDBOX
+    assert server._tool_context.codex_runtime_cua_approval_mode == "interactive"
+    assert server._tool_context.codex_runtime_cua_allowed_apps == frozenset()
     payload = _call()
     assert payload["success"] is True
     assert payload["app_name"] == "chatgpt-web-oauth-mcp"
@@ -30,6 +32,8 @@ def test_server_info_reports_metadata_and_tools() -> None:
     assert runtime_info["runtime_count"] >= 0
     assert runtime_info["binding_store"]["available"] is True
     assert runtime_info["default_sandbox"] == config.CODEX_RUNTIME_DEFAULT_SANDBOX
+    assert runtime_info["computer_use_approval_mode"] == "interactive"
+    assert runtime_info["computer_use_allowed_apps"] == []
 
     assert payload["routing_contract"]["chatgpt_web_role"] == "architect_manager_reviewer"
     assert payload["routing_contract"]["codex_runtime_role"] == "persistent_runtime_and_connected_mcp_access"

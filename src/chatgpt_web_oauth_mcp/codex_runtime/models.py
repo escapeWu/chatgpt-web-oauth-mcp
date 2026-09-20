@@ -7,6 +7,8 @@ from typing import Any, Literal, cast
 
 SandboxMode = Literal["read-only", "workspace-write", "full-access"]
 SANDBOX_MODES: tuple[SandboxMode, ...] = ("read-only", "workspace-write", "full-access")
+CuaApprovalMode = Literal["interactive", "prototype", "deny"]
+CUA_APPROVAL_MODES: tuple[CuaApprovalMode, ...] = ("interactive", "prototype", "deny")
 _SANDBOX_POLICY_TYPES = {
     "read-only": "readOnly",
     "workspace-write": "workspaceWrite",
@@ -25,6 +27,13 @@ def validate_sandbox(value: object) -> SandboxMode:
         allowed = ", ".join(SANDBOX_MODES)
         raise ValueError(f"sandbox must be one of: {allowed}.")
     return cast(SandboxMode, value)
+
+
+def validate_cua_approval_mode(value: object) -> CuaApprovalMode:
+    if value not in CUA_APPROVAL_MODES:
+        allowed = ", ".join(CUA_APPROVAL_MODES)
+        raise ValueError(f"Computer Use approval mode must be one of: {allowed}.")
+    return cast(CuaApprovalMode, value)
 
 
 def sandbox_policy(mode: SandboxMode) -> dict[str, object]:

@@ -94,6 +94,33 @@ def test_delegate_scheduler_defaults_and_wait_compatibility(monkeypatch: pytest.
     _restore_config_after_env_test()
 
 
+def test_codex_cua_approval_defaults_and_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    with monkeypatch.context() as patch:
+        patch.delenv("CHATGPT_MCP_CODEX_RUNTIME_CUA_APPROVAL_MODE", raising=False)
+        patch.delenv("CHATGPT_MCP_CODEX_RUNTIME_CUA_ALLOWED_APPS", raising=False)
+        importlib.reload(config)
+        assert config.CODEX_RUNTIME_CUA_APPROVAL_MODE == "interactive"
+        assert config.CODEX_RUNTIME_CUA_ALLOWED_APPS == ()
+
+        patch.setenv("CHATGPT_MCP_CODEX_RUNTIME_CUA_APPROVAL_MODE", " PROTOTYPE ")
+        patch.setenv(
+            "CHATGPT_MCP_CODEX_RUNTIME_CUA_ALLOWED_APPS",
+            " com.tencent.xinWeChat,com.google.Chrome,com.google.Chrome, ",
+        )
+        importlib.reload(config)
+        assert config.CODEX_RUNTIME_CUA_APPROVAL_MODE == "prototype"
+        assert config.CODEX_RUNTIME_CUA_ALLOWED_APPS == (
+            "com.tencent.xinWeChat",
+            "com.google.Chrome",
+        )
+
+        patch.setenv("CHATGPT_MCP_CODEX_RUNTIME_CUA_APPROVAL_MODE", "allow-all")
+        with pytest.raises(ValueError, match="Computer Use approval mode must be one of"):
+            importlib.reload(config)
+
+    _restore_config_after_env_test()
+
+
 def test_delegate_harness_commands_and_default_can_be_overridden(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

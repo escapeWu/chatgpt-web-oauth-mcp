@@ -73,6 +73,12 @@ ChatGPT Web 通过直接 MCP tools 完成检查、规划、编辑和验证。持
 4. 需要持久 Codex runtime 或已连接 MCP 访问时，使用 `codex_runtime_*` 和 `codex_mcp_*`。
 5. 在宣布完成前直接验证结果。
 
+Computer Use 授权默认使用 `interactive`。如需启用
+[Issue #12](https://github.com/escapeWu/chatgpt-web-oauth-mcp/issues/12) 的受限本地原型，设置
+`CHATGPT_MCP_CODEX_RUNTIME_CUA_APPROVAL_MODE=prototype`，并在
+`CHATGPT_MCP_CODEX_RUNTIME_CUA_ALLOWED_APPS` 中填写精确的 App bundle ID。该模式仅绕过
+`cua_repl` 的 `get_app_state` App-access gate；后续有副作用的操作仍保持交互确认。
+
 ## 依赖要求
 
 - Python 3.11 或更高版本
@@ -357,6 +363,8 @@ Token-aware 只读响应使用 `o200k_base` 编码，并提供统一结果协议
 | `CHATGPT_MCP_JOB_OUTPUT_TOKEN_BUDGET` | 否 | 继承全局 tool budget |
 | `CHATGPT_MCP_RUN_CAPTURE_MAX_BYTES` | 否 | `1048576` bytes |
 | `CHATGPT_MCP_CODEX_COMMAND` | 否 | `codex` |
+| `CHATGPT_MCP_CODEX_RUNTIME_CUA_APPROVAL_MODE` | 否 | `interactive`；也支持受限的 `prototype` 和 `deny` |
+| `CHATGPT_MCP_CODEX_RUNTIME_CUA_ALLOWED_APPS` | 否 | 空；逗号分隔的精确 App bundle ID allowlist |
 | `CHATGPT_MCP_PI_COMMAND` | 否 | `pi` |
 | `CHATGPT_MCP_COMMAND_TIMEOUT` | 否 | `120` 秒 |
 | `CHATGPT_MCP_DEBUG_MCP_LOGGING` | 否 | `0` |

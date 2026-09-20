@@ -60,9 +60,16 @@ def register_core_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
                 {
                     **ctx.codex_runtime_manager.info(),
                     "default_sandbox": ctx.codex_runtime_default_sandbox,
+                    "computer_use_approval_mode": ctx.codex_runtime_cua_approval_mode,
+                    "computer_use_allowed_apps": sorted(ctx.codex_runtime_cua_allowed_apps),
                 }
                 if ctx.codex_runtime_manager is not None
-                else {"enabled": False, "default_sandbox": ctx.codex_runtime_default_sandbox}
+                else {
+                    "enabled": False,
+                    "default_sandbox": ctx.codex_runtime_default_sandbox,
+                    "computer_use_approval_mode": ctx.codex_runtime_cua_approval_mode,
+                    "computer_use_allowed_apps": sorted(ctx.codex_runtime_cua_allowed_apps),
+                }
             ),
             "tmux": tmux_runtime_info(
                 binary=ctx.tmux_binary,
