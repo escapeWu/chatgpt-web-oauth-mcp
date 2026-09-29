@@ -288,3 +288,27 @@ def test_git_blame_line_range_restricts_entries(tmp_path: Path) -> None:
     assert result["success"] is True
     assert [entry["line"] for entry in result["entries"]] == [2, 3]
     assert [entry["content"] for entry in result["entries"]] == ["b", "c"]
+
+
+def test_git_commit_hook_does_not_inherit_control_plane_secrets(tmp_path: Path, monkeypatch) -> None:
+    _init_repo(tmp_path)
+    monkeypatch.setenv("CHATGPT_MCP_AUTH_TOKEN", "auth-secret")
+    monkeypatch.setenv("CHATGPT_MCP_HEALTH_TOKEN", "health-secret")
+    monkeypatch.setenv("CHATGPT_MCP_OAUTH_LOGIN_TOKEN", "oauth-secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "provider-secret")
+    out = tmp_path / "hook-env.txt"
+    hook = tmp_path / ".git" / "hooks" / "pre-commit"
+    hook.write_text(
+        f'#!/bin/sh\nenv | grep -E "^(CHATGPT_MCP_|OPENAI_API_KEY)" > "{out}"\nexit 0\n',
+        encoding="utf-8",
+    )
+    hook.chmod(0o755)
+    (tmp_path / "a.txt").write_text("a\n", encoding="utf-8")
+    subprocess.run(["git", "add", "a.txt"], cwd=tmp_path, check=True, capture_output=True, text=True)
+
+    result = git_commit(cwd=tmp_path, message="init")
+
+    assert result["success"] is True
+    seen = out.read_text(encoding="utf-8")
+    assert "CHATGPT_MCP_" not in seen
+    assert "OPENAI_API_KEY=provider-secret" in seen

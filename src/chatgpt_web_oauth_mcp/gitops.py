@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from .process_env import sanitized_child_env
 from .response_budget import (
     DEFAULT_TOOL_OUTPUT_TOKEN_BUDGET,
     ResponseBudget,
@@ -35,6 +36,7 @@ def _run_git(args: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", *args],
         cwd=str(cwd),
+        env=sanitized_child_env(),
         text=True,
         capture_output=True,
     )
