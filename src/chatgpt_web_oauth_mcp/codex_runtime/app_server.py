@@ -14,6 +14,7 @@ import time
 from typing import Any
 import uuid
 
+from ..process_env import sanitized_child_env
 from .errors import (
     AppServerCapabilityError,
     AppServerInteractionRequiredError,
@@ -135,6 +136,7 @@ class CodexAppServerAdapter:
                 process = subprocess.Popen(
                     self._argv,
                     cwd=str(self._cwd) if self._cwd is not None else None,
+                    env=sanitized_child_env(),
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,

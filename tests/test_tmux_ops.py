@@ -63,6 +63,9 @@ def test_tmux_run_uses_explicit_socket_shell_false_and_clean_client_env(monkeypa
 
     monkeypatch.setenv("TMUX", "/tmp/user-socket,1,0")
     monkeypatch.setenv("TMUX_PANE", "%9")
+    monkeypatch.setenv("CHATGPT_MCP_AUTH_TOKEN", "auth-secret")
+    monkeypatch.setenv("CHATGPT_MCP_HEALTH_TOKEN", "health-secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "provider-secret")
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     client = TmuxClient(binary="/custom/tmux", socket_name="mcp-test")
@@ -82,6 +85,9 @@ def test_tmux_run_uses_explicit_socket_shell_false_and_clean_client_env(monkeypa
     assert captured["input"] == b"input"
     assert "TMUX" not in captured["env"]
     assert "TMUX_PANE" not in captured["env"]
+    assert "CHATGPT_MCP_AUTH_TOKEN" not in captured["env"]
+    assert "CHATGPT_MCP_HEALTH_TOKEN" not in captured["env"]
+    assert captured["env"]["OPENAI_API_KEY"] == "provider-secret"
 
 
 def test_tmux_parse_rows_accepts_octal_escaped_field_separator() -> None:

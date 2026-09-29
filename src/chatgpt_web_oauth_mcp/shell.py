@@ -29,6 +29,7 @@ from .job_supervisor import (
     update_job_metadata,
     write_job_metadata,
 )
+from .process_env import sanitized_child_env
 from .response_budget import (
     BudgetMeasurement,
     DEFAULT_TOOL_OUTPUT_TOKEN_BUDGET,
@@ -1590,10 +1591,8 @@ def _jobs_runtime_dir(state_dir: Path) -> Path:
 
 
 def _merged_job_env(env: Mapping[str, str] | None) -> dict[str, str] | dict[str, object] | None:
-    if env is None:
-        return None
-    merged = os.environ.copy()
-    for key, value in env.items():
+    overrides = env or {}
+    for key, value in overrides.items():
         if not isinstance(key, str) or not key or "\x00" in key or "=" in key:
             return _job_error(
                 "invalid_env",
@@ -1601,8 +1600,7 @@ def _merged_job_env(env: Mapping[str, str] | None) -> dict[str, str] | dict[str,
             )
         if not isinstance(value, str) or "\x00" in value:
             return _job_error("invalid_env", "Environment variable values must be strings without NUL bytes.")
-        merged[key] = value
-    return merged
+    return sanitized_child_env(overrides)
 
 
 def _metadata_int(value: object) -> int | None:
@@ -2018,6 +2016,7 @@ def run_command(
             command,
             cwd=str(cwd),
             shell=True,
+            env=sanitized_child_env(),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             **popen_kwargs,

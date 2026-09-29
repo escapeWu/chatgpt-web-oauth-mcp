@@ -1,3 +1,4 @@
+import json
 import os
 import shlex
 import sys
@@ -31,6 +32,33 @@ def test_run_command_returns_stdout_and_exit_code(tmp_path: Path) -> None:
     assert result["exit_code"] == 0
     assert result["stdout"].strip() == "hello"
     assert result["timed_out"] is False
+
+
+def test_run_command_strips_control_plane_secrets_but_preserves_provider_env(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("CHATGPT_MCP_AUTH_TOKEN", "auth-secret")
+    monkeypatch.setenv("CHATGPT_MCP_HEALTH_TOKEN", "health-secret")
+    monkeypatch.setenv("CHATGPT_MCP_OAUTH_LOGIN_TOKEN", "oauth-secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "provider-secret")
+    result = run_command(
+        command=_python_cmd(
+            "import json, os; print(json.dumps({"
+            "'auth': os.getenv('CHATGPT_MCP_AUTH_TOKEN'), "
+            "'health': os.getenv('CHATGPT_MCP_HEALTH_TOKEN'), "
+            "'oauth': os.getenv('CHATGPT_MCP_OAUTH_LOGIN_TOKEN'), "
+            "'provider': os.getenv('OPENAI_API_KEY')}))"
+        ),
+        cwd=tmp_path,
+        timeout=5,
+    )
+    assert result["success"] is True
+    assert json.loads(result["stdout"]) == {
+        "auth": None,
+        "health": None,
+        "oauth": None,
+        "provider": "provider-secret",
+    }
 
 
 def test_run_command_preserves_small_stdout_stderr_and_failure(tmp_path: Path) -> None:

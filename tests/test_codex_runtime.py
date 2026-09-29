@@ -8,8 +8,9 @@ import textwrap
 
 import pytest
 
+from chatgpt_web_oauth_mcp.codex_runtime import app_server as app_server_module
 from chatgpt_web_oauth_mcp.codex_runtime.app_server import CodexAppServerAdapter
-from chatgpt_web_oauth_mcp.codex_runtime.errors import AppServerRpcError
+from chatgpt_web_oauth_mcp.codex_runtime.errors import AppServerRpcError, AppServerUnavailableError
 from chatgpt_web_oauth_mcp.codex_runtime.manager import CodexRuntimeManager
 from chatgpt_web_oauth_mcp.codex_runtime.models import sandbox_policy, thread_sandbox
 from chatgpt_web_oauth_mcp.tools_codex_runtime import _bounded
@@ -18,6 +19,31 @@ from chatgpt_web_oauth_mcp.tools_codex_runtime import _bounded
 def test_full_access_uses_codex_protocol_names() -> None:
     assert thread_sandbox("full-access") == "danger-full-access"
     assert sandbox_policy("full-access") == {"type": "dangerFullAccess"}
+
+
+def test_app_server_child_env_strips_control_plane_secrets(
+    tmp_path: Path, monkeypatch
+) -> None:
+    captured: dict[str, object] = {}
+    monkeypatch.setenv("CHATGPT_MCP_AUTH_TOKEN", "auth-secret")
+    monkeypatch.setenv("CHATGPT_MCP_HEALTH_TOKEN", "health-secret")
+    monkeypatch.setenv("CHATGPT_MCP_OAUTH_LOGIN_TOKEN", "oauth-secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "provider-secret")
+
+    def fake_popen(*args, **kwargs):
+        captured.update(kwargs)
+        raise OSError("intentional test stop")
+
+    monkeypatch.setattr(app_server_module.subprocess, "Popen", fake_popen)
+    adapter = CodexAppServerAdapter(command="codex", cwd=tmp_path)
+    with pytest.raises(AppServerUnavailableError):
+        adapter.start()
+
+    child_env = captured["env"]
+    assert "CHATGPT_MCP_AUTH_TOKEN" not in child_env
+    assert "CHATGPT_MCP_HEALTH_TOKEN" not in child_env
+    assert "CHATGPT_MCP_OAUTH_LOGIN_TOKEN" not in child_env
+    assert child_env["OPENAI_API_KEY"] == "provider-secret"
 
 
 class FakeAdapter:

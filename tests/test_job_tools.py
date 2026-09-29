@@ -173,6 +173,48 @@ def test_server_job_start_status_and_tail_logs(tmp_path: Path, monkeypatch) -> N
     assert stderr_tail["lines"] == ["err-one"]
 
 
+def test_durable_job_strips_control_plane_secrets_and_keeps_provider_env(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("CHATGPT_MCP_AUTH_TOKEN", "inherited-auth")
+    monkeypatch.setenv("CHATGPT_MCP_HEALTH_TOKEN", "inherited-health")
+    monkeypatch.setenv("CHATGPT_MCP_OAUTH_LOGIN_TOKEN", "inherited-oauth")
+    monkeypatch.setenv("OPENAI_API_KEY", "provider-secret")
+    state_dir = tmp_path / "state"
+    registry = JobRegistry()
+
+    started = registry.start_job(
+        command=_python_cmd(
+            "import json, os; print(json.dumps({"
+            "'auth': os.getenv('CHATGPT_MCP_AUTH_TOKEN'), "
+            "'health': os.getenv('CHATGPT_MCP_HEALTH_TOKEN'), "
+            "'oauth': os.getenv('CHATGPT_MCP_OAUTH_LOGIN_TOKEN'), "
+            "'provider': os.getenv('OPENAI_API_KEY'), "
+            "'custom': os.getenv('CUSTOM_JOB_ENV')}))"
+        ),
+        cwd=tmp_path,
+        state_dir=state_dir,
+        env={
+            "CHATGPT_MCP_AUTH_TOKEN": "override-must-not-pass",
+            "CUSTOM_JOB_ENV": "custom-value",
+        },
+    )
+    assert started["success"] is True
+    completed = _wait_for(
+        lambda: registry.job_status(job_id=started["job_id"], state_dir=state_dir),
+        lambda item: item["status"] != "running",
+    )
+    assert completed["status"] == "succeeded"
+    payload = json.loads(Path(completed["stdout_log"]).read_text(encoding="utf-8"))
+    assert payload == {
+        "auth": None,
+        "health": None,
+        "oauth": None,
+        "provider": "provider-secret",
+        "custom": "custom-value",
+    }
+
+
 @pytest.mark.skipif(os.name != "posix", reason="Detached supervisor bootstrap uses fork on POSIX.")
 def test_job_start_uses_overall_deadline_when_bootstrap_exceeds_old_two_second_wait(
     tmp_path: Path,

@@ -94,6 +94,9 @@ def test_pi_explore_invocation_enforces_read_only_tool_allowlist(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
+    monkeypatch.setenv("CHATGPT_MCP_AUTH_TOKEN", "auth-secret")
+    monkeypatch.setenv("CHATGPT_MCP_HEALTH_TOKEN", "health-secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "provider-secret")
 
     class FakeProcess:
         stdin = None
@@ -142,6 +145,10 @@ def test_pi_explore_invocation_enforces_read_only_tool_allowlist(
     assert result["commit_mode"] == "forbidden"
     assert result["structured_output"] == {"ok": True}
     assert "pi-delegates" in result["logs"]["log_dir"]
+    child_env = captured["kwargs"]["env"]
+    assert "CHATGPT_MCP_AUTH_TOKEN" not in child_env
+    assert "CHATGPT_MCP_HEALTH_TOKEN" not in child_env
+    assert child_env["OPENAI_API_KEY"] == "provider-secret"
 
 
 def test_pi_code_invocation_maps_model_and_reasoning_flags(

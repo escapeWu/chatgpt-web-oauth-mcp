@@ -11,6 +11,7 @@ import subprocess
 import time
 from typing import Sequence
 
+from .process_env import CONTROL_PLANE_SECRET_ENV_KEYS, sanitized_child_env
 from .response_budget import (
     DEFAULT_TOOL_OUTPUT_TOKEN_BUDGET,
     ResponseBudget,
@@ -217,10 +218,19 @@ class TmuxClient:
         self.timeout = max(1, int(timeout))
 
     def _client_env(self) -> dict[str, str]:
-        env = os.environ.copy()
+        env = sanitized_child_env()
         env.pop("TMUX", None)
         env.pop("TMUX_PANE", None)
         return env
+
+    def _scrub_server_control_plane_secrets(self) -> None:
+        """Remove credentials retained by an already-running tmux server."""
+
+        for key in sorted(CONTROL_PLANE_SECRET_ENV_KEYS):
+            result = self._run(["set-environment", "-g", "-u", key])
+            if result.exit_code == 0 or _is_no_server(_decode(result.stderr)):
+                continue
+            self._require_ok(result, operation="set-environment")
 
     def _run(self, args: Sequence[str], *, input_bytes: bytes | None = None) -> _RunResult:
         argv = [self.binary, "-L", self.socket_name, *args]
@@ -426,6 +436,7 @@ class TmuxClient:
                 if not normalized_command:
                     raise TmuxControlError("invalid_arguments", "command must be non-empty when provided.")
 
+            self._scrub_server_control_plane_secrets()
             create = self._run(
                 [
                     "new-session",
