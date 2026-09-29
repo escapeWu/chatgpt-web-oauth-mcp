@@ -29,8 +29,18 @@ from .models import SandboxMode, sandbox_policy, thread_sandbox
 DEFAULT_STARTUP_TIMEOUT_SECONDS = 15.0
 DEFAULT_MCP_CALL_TIMEOUT_SECONDS = 300.0
 DEFAULT_MAX_MESSAGE_BYTES = 8 * 1024 * 1024
+MAX_CONCURRENT_SERVER_REQUESTS = 8
 
 ServerRequestHandler = Callable[[dict[str, Any]], dict[str, Any]]
+
+
+@dataclass
+class _ServerRequestPool:
+    process: subprocess.Popen[bytes]
+    slots: threading.BoundedSemaphore = field(
+        default_factory=lambda: threading.BoundedSemaphore(MAX_CONCURRENT_SERVER_REQUESTS)
+    )
+    retired: threading.Event = field(default_factory=threading.Event)
 
 
 @dataclass
@@ -38,6 +48,7 @@ class _PendingRequest:
     request_id: int
     method: str
     params: dict[str, Any]
+    process: subprocess.Popen[bytes]
     server_request_handler: ServerRequestHandler | None = None
     event: threading.Event = field(default_factory=threading.Event)
     result: Any = None
@@ -82,6 +93,7 @@ class CodexAppServerAdapter:
         self._write_lock = threading.Lock()
         self._pending_lock = threading.Lock()
         self._pending: dict[int, _PendingRequest] = {}
+        self._server_request_pool: _ServerRequestPool | None = None
         self._next_request_id = 1
         self._process: subprocess.Popen[bytes] | None = None
         self._reader_thread: threading.Thread | None = None
@@ -135,6 +147,7 @@ class CodexAppServerAdapter:
                     f"Unable to start Codex App Server: {type(exc).__name__}."
                 ) from None
             self._process = process
+            self._server_request_pool = _ServerRequestPool(process=process)
             self._started = False
             self._capabilities.clear()
             assert process.stdout is not None
@@ -368,6 +381,7 @@ class CodexAppServerAdapter:
                 request_id=request_id,
                 method=method,
                 params=dict(params),
+                process=process,
                 server_request_handler=server_request_handler,
             )
             self._pending[request_id] = pending
@@ -404,8 +418,15 @@ class CodexAppServerAdapter:
     def _send_notification(self, method: str, params: dict[str, Any]) -> None:
         self._send_message({"jsonrpc": "2.0", "method": method, "params": params})
 
-    def _send_message(self, message: dict[str, Any]) -> None:
+    def _send_message(
+        self,
+        message: dict[str, Any],
+        *,
+        expected_process: subprocess.Popen[bytes] | None = None,
+    ) -> None:
         process = self._process
+        if expected_process is not None and process is not expected_process:
+            raise AppServerUnavailableError("Codex App Server connection changed.")
         if process is None or process.poll() is not None or process.stdin is None:
             raise AppServerUnavailableError()
         encoded = (json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n").encode(
@@ -428,28 +449,40 @@ class CodexAppServerAdapter:
                     break
                 if len(line) > self._max_message_bytes:
                     protocol_failure = True
-                    self._fail_pending(AppServerProtocolError("Codex App Server response exceeded the message limit."))
+                    self._fail_pending(
+                        AppServerProtocolError("Codex App Server response exceeded the message limit."),
+                        process=process,
+                    )
                     break
                 try:
                     message = json.loads(line.decode("utf-8"))
                 except (UnicodeDecodeError, json.JSONDecodeError):
                     protocol_failure = True
-                    self._fail_pending(AppServerProtocolError("Codex App Server returned invalid JSON."))
+                    self._fail_pending(
+                        AppServerProtocolError("Codex App Server returned invalid JSON."),
+                        process=process,
+                    )
                     break
                 if not isinstance(message, dict):
                     protocol_failure = True
-                    self._fail_pending(AppServerProtocolError("Codex App Server returned a non-object message."))
+                    self._fail_pending(
+                        AppServerProtocolError("Codex App Server returned a non-object message."),
+                        process=process,
+                    )
                     break
                 if "id" in message and ("result" in message or "error" in message):
-                    self._resolve_response(message)
+                    self._resolve_response(message, process=process)
                 elif "id" in message and "method" in message:
-                    self._handle_server_request(message)
+                    self._handle_server_request(message, process=process)
         finally:
             if protocol_failure:
                 with self._lifecycle_lock:
                     if self._process is process:
                         self._close_process_locked()
-            self._fail_pending(AppServerUnavailableError("Codex App Server exited."))
+            self._fail_pending(
+                AppServerUnavailableError("Codex App Server exited."),
+                process=process,
+            )
             with self._lifecycle_lock:
                 if self._process is process:
                     self._started = False
@@ -468,13 +501,18 @@ class CodexAppServerAdapter:
             if decoded:
                 self._stderr_tail.append(decoded[-512:])
 
-    def _resolve_response(self, message: dict[str, Any]) -> None:
+    def _resolve_response(
+        self,
+        message: dict[str, Any],
+        *,
+        process: subprocess.Popen[bytes],
+    ) -> None:
         request_id = message.get("id")
         if not isinstance(request_id, int):
             return
         with self._pending_lock:
             pending = self._pending.get(request_id)
-        if pending is None:
+        if pending is None or pending.process is not process:
             return
         bridge_failed = any("bridge_error" in interaction for interaction in pending.interactions)
         if bridge_failed:
@@ -508,14 +546,19 @@ class CodexAppServerAdapter:
             pending.result = message.get("result")
         pending.event.set()
 
-    def _handle_server_request(self, message: dict[str, Any]) -> None:
+    def _handle_server_request(
+        self,
+        message: dict[str, Any],
+        *,
+        process: subprocess.Popen[bytes],
+    ) -> None:
         method = message.get("method")
         interaction = {
             "method": method if isinstance(method, str) else "unknown",
             "request_id": message.get("id"),
             "params": message.get("params"),
         }
-        matches = self._matching_pending_calls(message)
+        matches = self._matching_pending_calls(message, process=process)
         with self._pending_lock:
             for pending in matches:
                 pending.interactions.append(dict(interaction))
@@ -528,6 +571,7 @@ class CodexAppServerAdapter:
                 message,
                 code=-32601,
                 reason=f"Unsupported Codex App Server request: {interaction['method']}.",
+                expected_process=process,
             )
             return
         if routed is None or routed.server_request_handler is None:
@@ -535,26 +579,81 @@ class CodexAppServerAdapter:
                 message,
                 code=-32001,
                 reason="Elicitation could not be correlated to exactly one active MCP tool call.",
+                expected_process=process,
             )
             return
 
-        try:
-            response = _normalize_elicitation_response(
-                routed.server_request_handler(interaction)
+        handler = routed.server_request_handler
+        with self._lifecycle_lock:
+            pool = self._server_request_pool
+            if pool is None or pool.process is not process or pool.retired.is_set():
+                return
+        if not pool.slots.acquire(blocking=False):
+            interaction["bridge_error"] = "Outer MCP elicitation concurrency limit reached."
+            self._reject_server_request(
+                message,
+                code=-32002,
+                reason="Too many concurrent Codex App Server elicitation requests.",
+                expected_process=process,
             )
-            interaction["action"] = response["action"]
-        except Exception:
-            interaction["bridge_error"] = "Outer MCP elicitation failed or timed out."
-            response = {"action": "cancel", "content": None, "_meta": None}
-        self._send_message(
-            {
-                "jsonrpc": "2.0",
-                "id": message.get("id"),
-                "result": response,
-            }
-        )
+            return
 
-    def _matching_pending_calls(self, message: dict[str, Any]) -> list[_PendingRequest]:
+        worker = threading.Thread(
+            target=self._complete_server_request,
+            args=(message, interaction, handler, pool),
+            name=f"codex-app-server-request-{message.get('id')}",
+            daemon=True,
+        )
+        try:
+            worker.start()
+        except RuntimeError:
+            pool.slots.release()
+            interaction["bridge_error"] = "Outer MCP elicitation worker could not start."
+            self._reject_server_request(
+                message,
+                code=-32003,
+                reason="Codex App Server elicitation worker could not start.",
+                expected_process=process,
+            )
+
+    def _complete_server_request(
+        self,
+        message: dict[str, Any],
+        interaction: dict[str, Any],
+        handler: ServerRequestHandler,
+        pool: _ServerRequestPool,
+    ) -> None:
+        try:
+            if pool.retired.is_set():
+                return
+            try:
+                response = _normalize_elicitation_response(handler(interaction))
+                interaction["action"] = response["action"]
+            except Exception:
+                interaction["bridge_error"] = "Outer MCP elicitation failed or timed out."
+                response = {"action": "cancel", "content": None, "_meta": None}
+            if pool.retired.is_set():
+                return
+            try:
+                self._send_message(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": message.get("id"),
+                        "result": response,
+                    },
+                    expected_process=pool.process,
+                )
+            except AppServerUnavailableError:
+                pass
+        finally:
+            pool.slots.release()
+
+    def _matching_pending_calls(
+        self,
+        message: dict[str, Any],
+        *,
+        process: subprocess.Popen[bytes],
+    ) -> list[_PendingRequest]:
         params = message.get("params")
         if not isinstance(params, dict):
             return []
@@ -566,7 +665,8 @@ class CodexAppServerAdapter:
             return [
                 pending
                 for pending in self._pending.values()
-                if pending.method == "mcpServer/tool/call"
+                if pending.process is process
+                and pending.method == "mcpServer/tool/call"
                 and pending.params.get("threadId") == thread_id
                 and pending.params.get("server") == server_name
             ]
@@ -577,21 +677,35 @@ class CodexAppServerAdapter:
         *,
         code: int,
         reason: str,
+        expected_process: subprocess.Popen[bytes] | None = None,
     ) -> None:
-        self._send_message(
-            {
-                "jsonrpc": "2.0",
-                "id": message.get("id"),
-                "error": {
-                    "code": code,
-                    "message": reason,
+        try:
+            self._send_message(
+                {
+                    "jsonrpc": "2.0",
+                    "id": message.get("id"),
+                    "error": {
+                        "code": code,
+                        "message": reason,
+                    },
                 },
-            }
-        )
+                expected_process=expected_process,
+            )
+        except AppServerUnavailableError:
+            pass
 
-    def _fail_pending(self, error: BaseException) -> None:
+    def _fail_pending(
+        self,
+        error: BaseException,
+        *,
+        process: subprocess.Popen[bytes] | None = None,
+    ) -> None:
         with self._pending_lock:
-            pending = list(self._pending.values())
+            pending = [
+                item
+                for item in self._pending.values()
+                if process is None or item.process is process
+            ]
         for item in pending:
             if not item.event.is_set():
                 item.error = error
@@ -605,6 +719,11 @@ class CodexAppServerAdapter:
         process = self._process
         if process is None or process.poll() is None:
             return
+        pool = self._server_request_pool
+        if pool is not None and pool.process is process:
+            pool.retired.set()
+            self._server_request_pool = None
+        self._fail_pending(AppServerUnavailableError("Codex App Server exited."), process=process)
         self._process = None
         self._started = False
         try:
@@ -616,7 +735,14 @@ class CodexAppServerAdapter:
         process = self._process
         self._started = False
         self._capabilities.clear()
-        self._fail_pending(AppServerUnavailableError("Codex App Server is shutting down."))
+        pool = self._server_request_pool
+        if pool is not None and (process is None or pool.process is process):
+            pool.retired.set()
+            self._server_request_pool = None
+        self._fail_pending(
+            AppServerUnavailableError("Codex App Server is shutting down."),
+            process=process,
+        )
         if process is None:
             return
         self._process = None

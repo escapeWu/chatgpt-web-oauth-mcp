@@ -6,14 +6,21 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 import stat
+import threading
 import textwrap
 
 import pytest
 from fastmcp import Client, FastMCP
 from fastmcp.client.elicitation import ElicitResult
 
-from chatgpt_web_oauth_mcp.codex_runtime.app_server import CodexAppServerAdapter
-from chatgpt_web_oauth_mcp.codex_runtime.errors import AppServerInteractionRequiredError
+from chatgpt_web_oauth_mcp.codex_runtime.app_server import (
+    MAX_CONCURRENT_SERVER_REQUESTS,
+    CodexAppServerAdapter,
+)
+from chatgpt_web_oauth_mcp.codex_runtime.errors import (
+    AppServerInteractionRequiredError,
+    AppServerUnavailableError,
+)
 from chatgpt_web_oauth_mcp.tools_codex_runtime import (
     _bridge_elicitation,
     _computer_use_approval_response,
@@ -628,3 +635,256 @@ def test_concurrent_calls_route_elicitation_by_thread_and_server(fake_adapter) -
     assert first_result["structuredContent"]["content"] == {"route": "thread-a"}
     assert second_result["structuredContent"]["content"] == {"route": "thread-b"}
     assert set(seen) == {("thread-a", "cua_repl"), ("thread-b", "node_repl")}
+
+
+def test_concurrent_elicitation_handlers_do_not_block_protocol_reader(fake_adapter) -> None:
+    adapter, _ = fake_adapter
+    adapter.start()
+    barrier = threading.Barrier(2)
+
+    def invoke(thread_id: str, server: str) -> dict[str, object]:
+        def handle(_interaction: dict[str, object]) -> dict[str, object]:
+            barrier.wait(timeout=1.5)
+            return {
+                "action": "accept",
+                "content": {"route": thread_id},
+                "_meta": None,
+            }
+
+        return adapter.mcp_call(
+            thread_id=thread_id,
+            server=server,
+            tool=f"concurrent_{thread_id}",
+            arguments={},
+            meta=None,
+            interaction_handler=handle,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(invoke, "parallel-a", "cua_repl")
+        second = pool.submit(invoke, "parallel-b", "node_repl")
+        first_result = first.result(timeout=5)
+        second_result = second.result(timeout=5)
+
+    assert first_result["structuredContent"]["content"] == {"route": "parallel-a"}
+    assert second_result["structuredContent"]["content"] == {"route": "parallel-b"}
+
+
+def test_inflight_elicitations_do_not_block_restart_capacity(
+    fake_adapter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _ = fake_adapter
+    adapter.start()
+    old_process = adapter._process
+    old_pool = adapter._server_request_pool
+    assert old_process is not None
+    assert old_pool is not None
+
+    entered = threading.Barrier(MAX_CONCURRENT_SERVER_REQUESTS + 1)
+    releases = [threading.Event() for _ in range(MAX_CONCURRENT_SERVER_REQUESTS)]
+    late_old_send = threading.Event()
+    original_send_message = adapter._send_message
+
+    def recording_send(message, *, expected_process=None):
+        if expected_process is old_process:
+            late_old_send.set()
+        return original_send_message(message, expected_process=expected_process)
+
+    monkeypatch.setattr(adapter, "_send_message", recording_send)
+
+    def invoke(index: int) -> dict[str, object]:
+        def handle(_interaction: dict[str, object]) -> dict[str, object]:
+            entered.wait(timeout=3)
+            assert releases[index].wait(timeout=5)
+            return {
+                "action": "accept",
+                "content": {"index": index},
+                "_meta": None,
+            }
+
+        return adapter.mcp_call(
+            thread_id=f"restart-thread-{index}",
+            server=f"restart-server-{index}",
+            tool=f"restart-tool-{index}",
+            arguments={},
+            meta=None,
+            interaction_handler=handle,
+        )
+
+    with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_SERVER_REQUESTS) as executor:
+        futures = [
+            executor.submit(invoke, index)
+            for index in range(MAX_CONCURRENT_SERVER_REQUESTS)
+        ]
+        try:
+            entered.wait(timeout=3)
+            generation = adapter.connection_generation
+            adapter.shutdown()
+
+            for future in futures:
+                with pytest.raises(AppServerUnavailableError):
+                    future.result(timeout=2)
+
+            with adapter._pending_lock:
+                assert not any(
+                    pending.process is old_process
+                    for pending in adapter._pending.values()
+                )
+
+            adapter.start()
+            assert adapter.connection_generation == generation + 1
+            recovered = adapter.mcp_call(
+                thread_id="restart-recovered",
+                server="restart-recovered-server",
+                tool="restart-recovered-tool",
+                arguments={},
+                meta=None,
+                interaction_handler=lambda _interaction: {
+                    "action": "accept",
+                    "content": {"recovered": True},
+                    "_meta": None,
+                },
+            )
+            assert recovered["structuredContent"]["content"] == {"recovered": True}
+        finally:
+            for release in releases:
+                release.set()
+
+        for _ in range(MAX_CONCURRENT_SERVER_REQUESTS):
+            assert old_pool.slots.acquire(timeout=2)
+        for _ in range(MAX_CONCURRENT_SERVER_REQUESTS):
+            old_pool.slots.release()
+
+    assert late_old_send.is_set() is False
+
+
+def test_elicitation_concurrency_saturation_rejects_and_reuses_slot(fake_adapter) -> None:
+    adapter, _ = fake_adapter
+    adapter.start()
+    entered = threading.Barrier(MAX_CONCURRENT_SERVER_REQUESTS + 1)
+    releases = [threading.Event() for _ in range(MAX_CONCURRENT_SERVER_REQUESTS)]
+    ninth_handler_called = threading.Event()
+
+    def invoke(index: int) -> dict[str, object]:
+        def handle(_interaction: dict[str, object]) -> dict[str, object]:
+            entered.wait(timeout=3)
+            assert releases[index].wait(timeout=5)
+            return {
+                "action": "accept",
+                "content": {"index": index},
+                "_meta": None,
+            }
+
+        return adapter.mcp_call(
+            thread_id=f"saturated-thread-{index}",
+            server=f"saturated-server-{index}",
+            tool=f"saturated-tool-{index}",
+            arguments={},
+            meta=None,
+            interaction_handler=handle,
+        )
+
+    with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_SERVER_REQUESTS) as executor:
+        futures = [
+            executor.submit(invoke, index)
+            for index in range(MAX_CONCURRENT_SERVER_REQUESTS)
+        ]
+        try:
+            entered.wait(timeout=3)
+
+            def ninth_handler(_interaction: dict[str, object]) -> dict[str, object]:
+                ninth_handler_called.set()
+                return {"action": "accept", "content": {}, "_meta": None}
+
+            with pytest.raises(AppServerInteractionRequiredError) as exc_info:
+                adapter.mcp_call(
+                    thread_id="saturated-ninth",
+                    server="saturated-ninth-server",
+                    tool="saturated-ninth-tool",
+                    arguments={},
+                    meta=None,
+                    interaction_handler=ninth_handler,
+                )
+            assert ninth_handler_called.is_set() is False
+            assert (
+                exc_info.value.details["interactions"][0]["bridge_error"]
+                == "Outer MCP elicitation concurrency limit reached."
+            )
+
+            inventory = adapter.mcp_inventory(
+                thread_id="saturated-inventory",
+                cursor=None,
+                limit=1,
+            )
+            assert inventory == {"data": [], "nextCursor": None}
+
+            releases[0].set()
+            first = futures[0].result(timeout=2)
+            assert first["structuredContent"]["content"] == {"index": 0}
+
+            reused = adapter.mcp_call(
+                thread_id="saturated-reused",
+                server="saturated-reused-server",
+                tool="saturated-reused-tool",
+                arguments={},
+                meta=None,
+                interaction_handler=lambda _interaction: {
+                    "action": "accept",
+                    "content": {"reused": True},
+                    "_meta": None,
+                },
+            )
+            assert reused["structuredContent"]["content"] == {"reused": True}
+        finally:
+            for release in releases:
+                release.set()
+            for future in futures[1:]:
+                future.result(timeout=2)
+
+
+def test_elicitation_worker_start_failure_releases_capacity(
+    fake_adapter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _ = fake_adapter
+    adapter.start()
+    original_start = threading.Thread.start
+
+    def fail_start(_thread: threading.Thread) -> None:
+        raise RuntimeError("worker start failed")
+
+    monkeypatch.setattr(threading.Thread, "start", fail_start)
+    for index in range(MAX_CONCURRENT_SERVER_REQUESTS):
+        with pytest.raises(AppServerInteractionRequiredError) as exc_info:
+            adapter.mcp_call(
+                thread_id=f"start-failure-{index}",
+                server=f"start-failure-server-{index}",
+                tool=f"start-failure-tool-{index}",
+                arguments={},
+                meta=None,
+                interaction_handler=lambda _interaction: {
+                    "action": "accept",
+                    "content": {},
+                    "_meta": None,
+                },
+            )
+        assert (
+            exc_info.value.details["interactions"][0]["bridge_error"]
+            == "Outer MCP elicitation worker could not start."
+        )
+
+    monkeypatch.setattr(threading.Thread, "start", original_start)
+    recovered = adapter.mcp_call(
+        thread_id="start-failure-recovered",
+        server="start-failure-recovered-server",
+        tool="start-failure-recovered-tool",
+        arguments={},
+        meta=None,
+        interaction_handler=lambda _interaction: {
+            "action": "accept",
+            "content": {"recovered": True},
+            "_meta": None,
+        },
+    )
+    assert recovered["structuredContent"]["content"] == {"recovered": True}
