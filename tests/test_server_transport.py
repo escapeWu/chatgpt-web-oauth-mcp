@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlparse
 
 import anyio
 import httpx
+import pytest
 import uvicorn
 from starlette.applications import Starlette
 from starlette.middleware import Middleware as StarletteMiddleware
@@ -257,26 +258,37 @@ def test_shared_token_mode_rejects_when_auth_token_is_empty(monkeypatch) -> None
     assert response.status_code == 401
 
 
-def test_oauth_metadata_does_not_trust_x_forwarded_host(monkeypatch, tmp_path) -> None:
-    # Without PUBLIC_BASE_URL the issuer URL falls back to the request's Host
-    # header, but X-Forwarded-Host must NOT be honored: a tunnel attacker could
-    # otherwise redirect the OAuth metadata to a phishing host.
+def test_oauth_mode_requires_public_base_url(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(server, "AUTH_MODE", "oauth")
     monkeypatch.setattr(server, "AUTH_TOKEN", "secret-token")
     monkeypatch.setattr(server, "PUBLIC_BASE_URL", "")
+    monkeypatch.setattr(server, "STATE_DIR", tmp_path)
+
+    with pytest.raises(ValueError, match="PUBLIC_BASE_URL is required"):
+        build_http_app()
+
+
+def test_oauth_metadata_uses_configured_public_base_url(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(server, "AUTH_MODE", "oauth")
+    monkeypatch.setattr(server, "AUTH_TOKEN", "secret-token")
+    monkeypatch.setattr(server, "PUBLIC_BASE_URL", "https://mcp.example.test")
     monkeypatch.setattr(server, "STATE_DIR", tmp_path)
     app = build_http_app()
 
     with TestClient(app) as client:
         response = client.get(
             "/.well-known/oauth-authorization-server",
-            headers={"X-Forwarded-Host": "attacker.example", "X-Forwarded-Proto": "https"},
+            headers={
+                "Host": "attacker.example",
+                "X-Forwarded-Host": "also-attacker.example",
+                "X-Forwarded-Proto": "http",
+            },
         )
 
     assert response.status_code == 200
     body = response.json()
-    assert "attacker.example" not in body["issuer"]
-    assert "attacker.example" not in body["authorization_endpoint"]
+    assert body["issuer"] == "https://mcp.example.test"
+    assert body["authorization_endpoint"] == "https://mcp.example.test/oauth/authorize"
 
 
 def test_oauth_register_enforces_client_limit(monkeypatch, tmp_path) -> None:

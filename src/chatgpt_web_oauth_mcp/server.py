@@ -288,13 +288,6 @@ def main(argv: list[str] | None = None) -> None:
 
     oauth_config = _current_oauth_config()
     if oauth_config.normalized_auth_mode == "oauth":
-        if not oauth_config.public_base_url:
-            print(
-                "WARNING: CHATGPT_MCP_PUBLIC_BASE_URL is not set; OAuth "
-                "metadata will fall back to the request Host header. Set it to "
-                "your public tunnel URL (e.g. https://mcp.example.com) so issuer "
-                "URLs cannot be spoofed."
-            )
         if not oauth_config.oauth_login_token and oauth_config.auth_token:
             print(
                 "WARNING: CHATGPT_MCP_OAUTH_LOGIN_TOKEN is not set; "

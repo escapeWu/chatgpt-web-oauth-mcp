@@ -47,11 +47,15 @@ class OAuthManager:
     def __init__(self, config: OAuthRuntimeConfig, *, mcp_path: str) -> None:
         self.config = config
         self.mcp_path = mcp_path
+        self._public_base_url = (
+            _validated_public_base_url(config.public_base_url)
+            if config.normalized_auth_mode == "oauth"
+            else config.public_base_url.strip().rstrip("/")
+        )
         self.store_path = config.state_dir / "oauth.json"
 
     def metadata_base_url(self, fallback_base_url: str) -> str:
-        configured = self.config.public_base_url.strip()
-        return (configured or fallback_base_url).rstrip("/")
+        return self._public_base_url or fallback_base_url.rstrip("/")
 
     def resource_url(self, base_url: str) -> str:
         return f"{base_url.rstrip('/')}{self.mcp_path}"
@@ -343,8 +347,73 @@ def _scope_set(scope: str) -> set[str]:
     return {item for item in scope.split() if item}
 
 
+def _validated_public_base_url(value: str) -> str:
+    raw = value or ""
+    normalized = raw.strip()
+    if not normalized:
+        raise ValueError(
+            "CHATGPT_MCP_PUBLIC_BASE_URL is required when "
+            "CHATGPT_MCP_AUTH_MODE=oauth."
+        )
+    if (
+        normalized != raw
+        or "\\" in normalized
+        or "#" in normalized
+        or "?" in normalized
+    ):
+        raise ValueError("CHATGPT_MCP_PUBLIC_BASE_URL must be a canonical origin URL.")
+    if any(
+        ord(character) < 0x20 or ord(character) == 0x7F
+        for character in normalized
+    ):
+        raise ValueError("CHATGPT_MCP_PUBLIC_BASE_URL must be a canonical origin URL.")
+    try:
+        parsed = urlparse(normalized)
+        parsed.port
+    except ValueError:
+        raise ValueError("CHATGPT_MCP_PUBLIC_BASE_URL is not a valid URL.") from None
+    if (
+        not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise ValueError("CHATGPT_MCP_PUBLIC_BASE_URL must be a canonical origin URL.")
+    hostname = parsed.hostname.lower()
+    if parsed.scheme == "https":
+        return normalized.rstrip("/")
+    if parsed.scheme == "http" and hostname in {"127.0.0.1", "::1", "localhost"}:
+        return normalized.rstrip("/")
+    raise ValueError(
+        "CHATGPT_MCP_PUBLIC_BASE_URL must use https, except for loopback http."
+    )
+
+
 def _is_allowed_redirect_uri(uri: str) -> bool:
-    parsed = urlparse(uri)
-    if parsed.scheme == "https" and parsed.netloc:
+    if not uri or uri != uri.strip():
+        return False
+    if "\\" in uri or "#" in uri:
+        return False
+    if any(ord(character) < 0x20 or ord(character) == 0x7F for character in uri):
+        return False
+    try:
+        parsed = urlparse(uri)
+    except ValueError:
+        return False
+    if parsed.fragment or parsed.username is not None or parsed.password is not None:
+        return False
+    if not parsed.hostname:
+        return False
+    try:
+        parsed.port
+    except ValueError:
+        return False
+    if parsed.scheme == "https":
         return True
-    return parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost"}
+    return parsed.scheme == "http" and parsed.hostname.lower() in {
+        "127.0.0.1",
+        "::1",
+        "localhost",
+    }
