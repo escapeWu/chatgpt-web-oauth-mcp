@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .process_env import sanitized_child_env
+
 
 COMMON_ENV_FILES = (
     "pyproject.toml",
@@ -52,6 +54,7 @@ def _run(
         result = subprocess.run(
             args,
             cwd=str(cwd),
+            env=sanitized_child_env(),
             capture_output=True,
             text=True,
             timeout=timeout,

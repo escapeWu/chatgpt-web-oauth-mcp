@@ -7,6 +7,7 @@ import subprocess
 from fnmatch import fnmatch
 from pathlib import Path
 
+from .process_env import sanitized_child_env
 from .response_budget import (
     DEFAULT_TOOL_OUTPUT_TOKEN_BUDGET,
     ResponseBudget,
@@ -99,6 +100,7 @@ def _git_tracked_allowed_paths(repo_root: Path) -> set[Path] | None:
         result = subprocess.run(
             ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
             cwd=str(repo_root),
+            env=sanitized_child_env(),
             capture_output=True,
             text=True,
             timeout=15,

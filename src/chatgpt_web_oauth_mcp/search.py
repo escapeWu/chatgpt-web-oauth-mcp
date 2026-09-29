@@ -15,6 +15,7 @@ from .files import (
     _git_tracked_allowed_paths,
     _iter_filtered,
 )
+from .process_env import sanitized_child_env
 from .response_budget import (
     DEFAULT_TOOL_OUTPUT_TOKEN_BUDGET,
     ResponseBudget,
@@ -833,6 +834,7 @@ def grep_files(
         process = subprocess.Popen(
             command,
             cwd=cwd,
+            env=sanitized_child_env(),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             bufsize=0,
