@@ -321,8 +321,8 @@ description: Manage persistent Codex runtimes with stable logical identities, re
 
 1. For recurring logical workers, use `codex_runtime_acquire` with a stable name such as `manager`, `plm-worker-01`, or `research-worker-02`. Do not create timestamp-suffixed names for every run unless a truly separate runtime is required.
 2. Use `codex_runtime_list` to discover existing bindings and `codex_runtime_resume` when a specific known runtime identity must be continued. Use `codex_runtime_open` only for intentionally new isolated runtimes.
-3. `codex_runtime_close` detaches the local binding; it does not archive or delete the upstream Codex thread. Any binding with no runtime use beyond the configured idle TTL is eligible for automatic GC, while capacity-driven LRU eviction is detached-only.
-4. Capacity LRU never evicts a `ready` runtime. Idle-TTL GC can collect a `ready` binding only after it has had no runtime operation for the full TTL. Check `server_info.codex_runtime` for `max_concurrency`, `max_runtimes`, `idle_ttl_seconds`, and GC counters instead of assuming limits.
+3. `codex_runtime_close` defaults to detaching the binding for fast reuse. Pass `release_resources=true` when temporary REPL state is no longer needed: it unsubscribes and verifies thread unload while retaining the runtime ID and stored history. A harness-only thread with no rollout is recreated on resume. Neither mode archives or deletes history. Idle-TTL GC and detached-only capacity LRU release owned thread/tool processes before dropping bindings.
+4. Capacity LRU never evicts a `ready` runtime. Periodic idle-TTL GC can collect an idle `ready` binding after the full TTL; active requests and timed-out upstream work still awaiting a result prevent release. Failed cleanup retains ownership and is retried. Check `server_info.codex_runtime` for limits, active request counts, live thread counts, and cleanup counters.
 5. Runtime GC removes the local resumable binding only. If a binding has been collected, acquire the stable logical name again instead of assuming its old `runtime_id` remains valid.
 
 ## Choose the tool
@@ -350,7 +350,7 @@ reuse / resume existing binding, or open once
       ↓
 work through codex_mcp_* as needed
       ↓
-codex_runtime_close when the worker is idle
+codex_runtime_close when the worker is idle (release_resources=true if transient REPL state can be discarded)
       ↓
 reuse before TTL, otherwise acquire recreates it later
 ```

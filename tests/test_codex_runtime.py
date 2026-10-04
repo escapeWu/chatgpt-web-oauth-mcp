@@ -51,6 +51,7 @@ class FakeAdapter:
         self.running = False
         self.calls: list[tuple[str, dict[str, object]]] = []
         self.thread_number = 0
+        self.live_threads: set[str] = set()
         self.connection_generation = 0
 
     def info(self) -> dict[str, object]:
@@ -77,6 +78,7 @@ class FakeAdapter:
         self.running = True
         self.thread_number += 1
         thread_id = f"thread-{self.thread_number}"
+        self.live_threads.add(thread_id)
         self.calls.append(("thread/start", {"cwd": cwd, "sandbox": sandbox}))
         return {
             "thread": {"id": thread_id},
@@ -86,6 +88,7 @@ class FakeAdapter:
 
     def thread_resume(self, *, thread_id: str, cwd: str, sandbox: str) -> dict[str, object]:
         self.running = True
+        self.live_threads.add(thread_id)
         self.calls.append(("thread/resume", {"thread_id": thread_id, "cwd": cwd, "sandbox": sandbox}))
         return {
             "thread": {"id": thread_id},
@@ -139,7 +142,23 @@ class FakeAdapter:
             "_meta": meta,
         }
 
+    def owns_thread(self, thread_id: str) -> bool:
+        return thread_id in self.live_threads
+
+    def has_pending_operations(self, thread_id: str) -> bool:
+        return False
+
+    def cleanup_abandoned_threads(self) -> None:
+        pass
+
+    def release_thread(self, *, thread_id: str) -> dict[str, object]:
+        self.calls.append(("thread/unsubscribe", {"thread_id": thread_id}))
+        self.live_threads.discard(thread_id)
+        return {"status": "unsubscribed", "resources_released": True}
+
+    def shutdown(self) -> None:
         self.running = False
+        self.live_threads.clear()
 
 
 def _manager(

@@ -109,6 +109,7 @@ codex_runtime_manager = CodexRuntimeManager(
 
 @asynccontextmanager
 async def _mcp_lifespan(_server: Any):
+    codex_runtime_manager.start_gc()
     try:
         yield {}
     finally:

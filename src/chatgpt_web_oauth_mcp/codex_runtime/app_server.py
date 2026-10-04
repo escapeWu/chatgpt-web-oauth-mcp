@@ -51,6 +51,7 @@ class _PendingRequest:
     params: dict[str, Any]
     process: subprocess.Popen[bytes]
     server_request_handler: ServerRequestHandler | None = None
+    abandoned: bool = False
     event: threading.Event = field(default_factory=threading.Event)
     result: Any = None
     error: BaseException | None = None
@@ -63,6 +64,8 @@ class CodexAppServerAdapter:
     REQUIRED_METHODS = (
         "thread/start",
         "thread/resume",
+        "thread/unsubscribe",
+        "thread/loaded/list",
         "command/exec",
         "mcpServerStatus/list",
         "mcpServer/tool/call",
@@ -86,7 +89,8 @@ class CodexAppServerAdapter:
             raise ValueError("startup_timeout_seconds must be positive.")
         if max_message_bytes <= 0:
             raise ValueError("max_message_bytes must be positive.")
-        self._argv = [*argv, "app-server", "--listen", "stdio://"]
+        # Only this bridge-owned process: explicit unsubscribe should release promptly.
+        self._argv = [*argv, "app-server", "--listen", "stdio://", "-c", "thread_unload_delay_secs=0"]
         self._cwd = Path(cwd).expanduser().resolve() if cwd is not None else None
         self._startup_timeout_seconds = float(startup_timeout_seconds)
         self._max_message_bytes = int(max_message_bytes)
@@ -94,6 +98,8 @@ class CodexAppServerAdapter:
         self._write_lock = threading.Lock()
         self._pending_lock = threading.Lock()
         self._pending: dict[int, _PendingRequest] = {}
+        self._abandoned_threads: set[tuple[subprocess.Popen[bytes], str]] = set()
+        self._claimed_threads: set[tuple[subprocess.Popen[bytes], str]] = set()
         self._server_request_pool: _ServerRequestPool | None = None
         self._next_request_id = 1
         self._process: subprocess.Popen[bytes] | None = None
@@ -125,6 +131,7 @@ class CodexAppServerAdapter:
             "process_status": "running" if self.is_running() else "stopped",
             "command": self.command_name,
             "capabilities": list(self.capabilities),
+            "cleanup_pending_count": len(self._abandoned_threads),
         }
 
     def start(self) -> None:
@@ -194,6 +201,82 @@ class CodexAppServerAdapter:
     def shutdown(self) -> None:
         with self._lifecycle_lock:
             self._close_process_locked()
+
+    def owns_thread(self, thread_id: str) -> bool:
+        with self._pending_lock:
+            key = (self._process, thread_id)
+            return key in self._claimed_threads or key in self._abandoned_threads
+
+    def has_pending_operations(self, thread_id: str) -> bool:
+        with self._pending_lock:
+            return any(
+                item.process is self._process
+                and item.params.get("threadId") == thread_id
+                and not item.event.is_set()
+                for item in self._pending.values()
+            )
+
+    def loaded_thread_ids(self) -> set[str]:
+        if not self.is_running():
+            return set()
+        return self._loaded_thread_ids(deadline=time.monotonic() + self._startup_timeout_seconds)
+
+    def _loaded_thread_ids(self, *, deadline: float) -> set[str]:
+        ids: set[str] = set()
+        cursor = None
+        seen: set[str] = set()
+        for _ in range(128):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise AppServerRequestTimeoutError("thread/loaded/list", self._startup_timeout_seconds)
+            result = _require_object(self._request_raw(
+                "thread/loaded/list", {"limit": 100, "cursor": cursor}, timeout_seconds=remaining,
+            ), "thread/loaded/list")
+            data = result.get("data")
+            if not isinstance(data, list) or not all(isinstance(item, str) for item in data):
+                raise AppServerProtocolError("Codex returned invalid loaded thread IDs.")
+            ids.update(data)
+            cursor = result.get("nextCursor")
+            if cursor is None:
+                return ids
+            if not isinstance(cursor, str) or cursor in seen:
+                raise AppServerProtocolError("Codex returned an invalid loaded thread cursor.")
+            seen.add(cursor)
+        raise AppServerProtocolError("Codex loaded thread pagination exceeded its limit.")
+
+    def release_thread(
+        self, *, thread_id: str, expected_process: subprocess.Popen[bytes] | None = None,
+    ) -> dict[str, Any]:
+        with self._lifecycle_lock:
+            if expected_process is not None and self._process is not expected_process:
+                return {"status": "notLoaded", "resources_released": True}
+            if not self.is_running():
+                return {"status": "notLoaded", "resources_released": True}
+            if self.has_pending_operations(thread_id):
+                raise AppServerProtocolError("Cannot release a thread with unfinished requests.")
+            deadline = time.monotonic() + self._startup_timeout_seconds
+            result = _require_object(self._request_raw(
+                "thread/unsubscribe", {"threadId": thread_id},
+                timeout_seconds=self._startup_timeout_seconds,
+            ), "thread/unsubscribe")
+            if result.get("status") not in {"notLoaded", "notSubscribed", "unsubscribed"}:
+                raise AppServerProtocolError("Codex returned an invalid unsubscribe status.")
+            while thread_id in self._loaded_thread_ids(deadline=deadline):
+                if time.monotonic() >= deadline:
+                    raise AppServerRequestTimeoutError("thread/unsubscribe", self._startup_timeout_seconds)
+                time.sleep(min(0.05, max(0, deadline - time.monotonic())))
+            with self._pending_lock:
+                self._claimed_threads.discard((self._process, thread_id))
+                self._abandoned_threads.discard((self._process, thread_id))
+            return {**result, "resources_released": True}
+
+    def cleanup_abandoned_threads(self) -> None:
+        with self._pending_lock:
+            threads = list(self._abandoned_threads)
+        for process, thread_id in threads:
+            self.release_thread(thread_id=thread_id, expected_process=process)
+            with self._pending_lock:
+                self._abandoned_threads.discard((process, thread_id))
 
     def thread_start(self, *, cwd: str, sandbox: SandboxMode) -> dict[str, Any]:
         self.start()
@@ -330,6 +413,8 @@ class CodexAppServerAdapter:
             # to exercise method dispatch without creating a probe thread.
             "thread/start": {"cwd": 1},
             "thread/resume": {},
+            "thread/unsubscribe": {},
+            "thread/loaded/list": {},
             "command/exec": {},
             "mcpServerStatus/list": {},
             "mcpServer/tool/call": {},
@@ -377,6 +462,8 @@ class CodexAppServerAdapter:
         if process is None or process.poll() is not None or process.stdin is None:
             raise AppServerUnavailableError()
         with self._pending_lock:
+            if len(self._pending) >= 128:
+                raise AppServerProtocolError("Codex pending request limit reached; wait for unfinished work.")
             request_id = self._next_request_id
             self._next_request_id += 1
             pending = _PendingRequest(
@@ -394,7 +481,8 @@ class CodexAppServerAdapter:
                     "id": request_id,
                     "method": method,
                     "params": params,
-                }
+                },
+                expected_process=process,
             )
         except Exception:
             self._remove_pending(request_id)
@@ -409,9 +497,15 @@ class CodexAppServerAdapter:
         remove_on_timeout: bool = True,
     ) -> Any:
         if not pending.event.wait(timeout=max(0.001, timeout_seconds)):
-            if remove_on_timeout:
-                self._remove_pending(pending.request_id)
-            raise AppServerRequestTimeoutError(pending.method, timeout_seconds) from None
+            with self._pending_lock:
+                if not pending.event.is_set():
+                    if remove_on_timeout:
+                        if pending.method in {"thread/start", "thread/resume", "mcpServer/tool/call"}:
+                            # Keep ownership until the actual upstream result arrives.
+                            pending.abandoned = True
+                        else:
+                            self._pending.pop(pending.request_id, None)
+                    raise AppServerRequestTimeoutError(pending.method, timeout_seconds) from None
         self._remove_pending(pending.request_id)
         if pending.error is not None:
             raise pending.error
@@ -487,8 +581,7 @@ class CodexAppServerAdapter:
             )
             with self._lifecycle_lock:
                 if self._process is process:
-                    self._started = False
-                    self._process = None
+                    self._close_process_locked()
 
     def _read_stderr(self, process: subprocess.Popen[bytes]) -> None:
         assert process.stderr is not None
@@ -547,6 +640,19 @@ class CodexAppServerAdapter:
         else:
             pending.result = message.get("result")
         pending.event.set()
+        with self._pending_lock:
+            if pending.method in {"thread/start", "thread/resume"} and isinstance(pending.result, dict):
+                thread = pending.result.get("thread")
+                if isinstance(thread, dict) and isinstance(thread.get("id"), str):
+                    key = (process, thread["id"])
+                    if pending.abandoned:
+                        if key not in self._claimed_threads:
+                            self._abandoned_threads.add(key)
+                    else:
+                        self._claimed_threads.add(key)
+                        self._abandoned_threads.discard(key)
+            if pending.abandoned:
+                self._pending.pop(request_id, None)
 
     def _handle_server_request(
         self,
@@ -721,17 +827,7 @@ class CodexAppServerAdapter:
         process = self._process
         if process is None or process.poll() is None:
             return
-        pool = self._server_request_pool
-        if pool is not None and pool.process is process:
-            pool.retired.set()
-            self._server_request_pool = None
-        self._fail_pending(AppServerUnavailableError("Codex App Server exited."), process=process)
-        self._process = None
-        self._started = False
-        try:
-            process.stdin.close() if process.stdin is not None else None
-        except OSError:
-            pass
+        self._close_process_locked()
 
     def _close_process_locked(self) -> None:
         process = self._process
@@ -748,12 +844,17 @@ class CodexAppServerAdapter:
         if process is None:
             return
         self._process = None
+        with self._pending_lock:
+            self._pending = {key: item for key, item in self._pending.items() if item.process is not process}
+            self._abandoned_threads = {item for item in self._abandoned_threads if item[0] is not process}
+            self._claimed_threads = {item for item in self._claimed_threads if item[0] is not process}
         try:
             if process.stdin is not None:
                 process.stdin.close()
         except OSError:
             pass
-        if process.poll() is None:
+        # The session's descendants can outlive its group leader.
+        if os.name == "posix" or process.poll() is None:
             try:
                 if os.name == "posix":
                     os.killpg(process.pid, signal.SIGTERM)
@@ -774,6 +875,11 @@ class CodexAppServerAdapter:
                 try:
                     process.wait(timeout=2.0)
                 except subprocess.TimeoutExpired:
+                    pass
+            if os.name == "posix":
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except (OSError, ProcessLookupError):
                     pass
 
 

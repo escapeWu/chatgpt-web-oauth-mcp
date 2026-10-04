@@ -687,7 +687,8 @@ def test_inflight_elicitations_do_not_block_restart_capacity(
     original_send_message = adapter._send_message
 
     def recording_send(message, *, expected_process=None):
-        if expected_process is old_process:
+        # Normal RPCs are process-bound too; only sends after retirement are late.
+        if expected_process is old_process and old_pool.retired.is_set():
             late_old_send.set()
         return original_send_message(message, expected_process=expected_process)
 
