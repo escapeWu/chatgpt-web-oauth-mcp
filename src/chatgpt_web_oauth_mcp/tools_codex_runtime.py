@@ -207,17 +207,19 @@ def register_codex_runtime_tools(mcp: Any, ctx: ToolContext) -> dict[str, object
         annotations=LOCAL_STATE_TOOL,
         description=(
             "Mark a local Codex runtime binding detached while preserving its runtime_id and Codex thread. "
-            "This is detach-only: it does not call thread/delete or thread/archive, and the same runtime_id "
-            "can be resumed later until the detached binding is reclaimed by idle-TTL GC or capacity LRU."
+            "By default this is detach-only. Set release_resources=true to also unsubscribe and verify "
+            "that its in-memory thread/tool processes unload. Neither mode archives or deletes history. "
+            "A released harness-only thread without a rollout is recreated on resume; REPL memory is lost."
         ),
     )
     def codex_runtime_close(
         runtime_id: Annotated[str, Field(description="Runtime identity to detach.")],
+        release_resources: Annotated[bool, Field(description="Also release tool processes; transient REPL state is lost.")] = False,
     ) -> dict[str, object]:
         manager = _manager_or_error(ctx)
         if isinstance(manager, dict):
             return manager
-        return _invoke(lambda: manager.close_runtime(runtime_id))
+        return _invoke(lambda: manager.close_runtime(runtime_id, release_resources=release_resources))
 
     @mcp.tool(
         name="codex_mcp_inventory",

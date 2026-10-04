@@ -69,6 +69,13 @@ class CodexRuntimeManager:
         self.max_timeout_ms = int(max_timeout_ms)
         self.output_bytes_cap = int(output_bytes_cap)
         self._lock = threading.RLock()
+        # ponytail: serialize allocations; key-specific locks if startup throughput matters.
+        self._allocation_lock = threading.RLock()
+        self._active_requests: dict[str, int] = {}
+        self._pending_release: set[str] = set()
+        self._cleanup_error: str | None = None
+        self._gc_stop = threading.Event()
+        self._gc_thread: threading.Thread | None = None
         self._slots = threading.BoundedSemaphore(self.max_concurrency)
         self._store = BindingStore(self.state_dir)
         self._load_error: BindingStoreError | None = None
@@ -127,7 +134,11 @@ class CodexRuntimeManager:
                     "expired_collected_total": self._gc_collected_total,
                     "lru_evicted_total": self._lru_evicted_total,
                     "lru_scope": "detached-only",
+                    "cleanup_pending_count": len(self._pending_release) + int(adapter_info.get("cleanup_pending_count", 0)),
+                    "cleanup_error": self._cleanup_error,
                 },
+                "live_thread_count": len(self._live_thread_ids),
+                "active_request_count": sum(self._active_requests.values()),
                 "default_timeout_ms": self.default_timeout_ms,
                 "max_timeout_ms": self.max_timeout_ms,
                 "output_bytes_cap": self.output_bytes_cap,
@@ -135,6 +146,16 @@ class CodexRuntimeManager:
             }
 
     def open_runtime(
+        self,
+        *,
+        cwd: Path,
+        sandbox: SandboxMode,
+        name: str | None,
+    ) -> dict[str, object]:
+        with self._allocation_lock:
+            return self._open_runtime(cwd=cwd, sandbox=sandbox, name=name)
+
+    def _open_runtime(
         self,
         *,
         cwd: Path,
@@ -157,6 +178,7 @@ class CodexRuntimeManager:
             expected_sandbox=target_sandbox,
             method="thread/start",
         )
+        self._sync_connection_generation()
         now = time.time()
         binding = RuntimeBinding(
             runtime_id=new_runtime_id(),
@@ -171,14 +193,14 @@ class CodexRuntimeManager:
         try:
             with self._lock:
                 self._ensure_capacity_locked(required=1)
+                self._live_thread_ids.add(thread_id)
                 updated = {**self._bindings, binding.runtime_id: binding}
                 self._save_bindings(updated)
         except CodexRuntimeError as exc:
             exc.side_effects["thread_created"] = True
             exc.side_effects["thread_id"] = thread_id
+            self._compensate_allocation(thread_id, exc)
             raise
-        self._sync_connection_generation()
-        self._live_thread_ids.add(thread_id)
         return {"success": True, **runtime_public_dict(binding)}
 
     def list_runtimes(
@@ -233,6 +255,16 @@ class CodexRuntimeManager:
         sandbox: SandboxMode,
         name: str,
     ) -> dict[str, object]:
+        with self._allocation_lock:
+            return self._acquire_runtime(cwd=cwd, sandbox=sandbox, name=name)
+
+    def _acquire_runtime(
+        self,
+        *,
+        cwd: Path,
+        sandbox: SandboxMode,
+        name: str,
+    ) -> dict[str, object]:
         self._ensure_store()
         target_cwd = self._validate_cwd(cwd)
         target_sandbox = validate_sandbox(sandbox)
@@ -276,6 +308,17 @@ class CodexRuntimeManager:
         return resumed
 
     def resume_runtime(
+        self,
+        *,
+        runtime_id: str | None,
+        thread_id: str | None,
+        cwd: Path | None,
+        sandbox: SandboxMode | None,
+    ) -> dict[str, object]:
+        with self._allocation_lock:
+            return self._resume_runtime(runtime_id=runtime_id, thread_id=thread_id, cwd=cwd, sandbox=sandbox)
+
+    def _resume_runtime(
         self,
         *,
         runtime_id: str | None,
@@ -351,6 +394,9 @@ class CodexRuntimeManager:
                 expected_sandbox = validate_sandbox(sandbox)
 
         self._sync_connection_generation()
+        with self._lock:
+            if target_thread_id in self._pending_release:
+                self._release_thread_locked(target_thread_id)
         reused_connection = (
             existing is not None
             and self._adapter.is_running()
@@ -418,17 +464,19 @@ class CodexRuntimeManager:
             with self._lock:
                 if existing is None:
                     self._ensure_capacity_locked(required=1)
+                self._live_thread_ids.add(target_thread_id)
                 updated = dict(self._bindings)
                 updated[binding.runtime_id] = binding
                 self._save_bindings(updated)
         except CodexRuntimeError as exc:
             exc.side_effects["thread_resumed"] = True
             exc.side_effects["thread_id"] = target_thread_id
+            if not reused_connection:
+                self._compensate_allocation(target_thread_id, exc)
             raise
-        self._sync_connection_generation()
         if previous_thread_id is not None:
-            self._live_thread_ids.discard(previous_thread_id)
-        self._live_thread_ids.add(binding.thread_id)
+            with self._lock:
+                self._release_thread_locked(previous_thread_id)
         payload: dict[str, object] = {"success": True, **runtime_public_dict(binding)}
         payload["resume_mode"] = "reattached" if reused_connection else "resumed"
         if thread_recreated:
@@ -456,12 +504,16 @@ class CodexRuntimeManager:
                 "recovery": "Call codex_runtime_resume with this runtime_id.",
             }
 
-    def close_runtime(self, runtime_id: str) -> dict[str, object]:
+    def close_runtime(self, runtime_id: str, *, release_resources: bool = False) -> dict[str, object]:
         self._ensure_store()
-        with self._lock:
+        with self._allocation_lock, self._lock:
             binding = self._bindings.get(runtime_id)
             if binding is None:
                 raise CodexRuntimeError("runtime_not_found", f"Unknown runtime_id: {runtime_id}.")
+            if self._thread_in_use_locked(binding.thread_id):
+                raise CodexRuntimeError("runtime_busy", "The runtime has unfinished requests; retry after they finish.", retryable=True)
+            if release_resources:
+                self._release_thread_locked(binding.thread_id)
             detached_binding = replace(binding, status="detached", last_used_at=time.time())
             updated = dict(self._bindings)
             updated[runtime_id] = detached_binding
@@ -472,6 +524,8 @@ class CodexRuntimeManager:
             "preserved_thread": True,
             "binding_preserved": True,
             "destructive_action": False,
+            "resources_released": release_resources,
+            "resume_may_recreate_thread": release_resources,
         }
 
     def exec_command(
@@ -497,7 +551,7 @@ class CodexRuntimeManager:
                     details={"runtime_id": runtime_id, "bound_cwd": str(effective_cwd)},
                 ) from None
             effective_cwd = requested_cwd
-        with self._request_slot():
+        with self._request_slot(runtime_id=runtime_id, thread_id=binding.thread_id):
             result = self._adapter.command_exec(
                 command=normalized_command,
                 cwd=str(effective_cwd),
@@ -547,7 +601,7 @@ class CodexRuntimeManager:
                 "invalid_arguments",
                 f"limit must be between 1 and {MAX_INVENTORY_LIMIT}.",
             )
-        with self._request_slot():
+        with self._request_slot(runtime_id=runtime_id, thread_id=binding.thread_id):
             result = self._adapter.mcp_inventory(
                 thread_id=binding.thread_id,
                 cursor=normalized_cursor,
@@ -621,7 +675,7 @@ class CodexRuntimeManager:
         }
         if interaction_handler is not None:
             call_kwargs["interaction_handler"] = interaction_handler
-        with self._request_slot():
+        with self._request_slot(runtime_id=runtime_id, thread_id=binding.thread_id):
             result = self._adapter.mcp_call(**call_kwargs)
         self._touch(runtime_id)
         is_error = result.get("isError")
@@ -645,12 +699,71 @@ class CodexRuntimeManager:
             }
         return payload
 
-    def shutdown(self) -> None:
+    def start_gc(self) -> None:
         with self._lock:
+            if self._gc_thread is not None:
+                return
+            self._gc_stop.clear()
+            self._gc_thread = threading.Thread(target=self._gc_loop, name="codex-runtime-gc", daemon=True)
+            self._gc_thread.start()
+
+    def _gc_loop(self) -> None:
+        while not self._gc_stop.wait(min(60.0, self.idle_ttl_seconds)):
+            try:
+                self._collect_expired_idle(suppress_errors=True)
+            except CodexRuntimeError as exc:
+                self._cleanup_error = exc.code
+
+    def shutdown(self) -> None:
+        self._gc_stop.set()
+        gc_thread = self._gc_thread
+        if gc_thread is not None:
+            gc_thread.join(timeout=self.startup_timeout_seconds + 1)
+        with self._allocation_lock, self._lock:
             for runtime_id, binding in list(self._bindings.items()):
                 self._bindings[runtime_id] = replace(binding, status="detached")
             self._live_thread_ids.clear()
-        self._adapter.shutdown()
+            self._pending_release.clear()
+            self._gc_thread = None
+            self._adapter.shutdown()
+
+    def _thread_in_use_locked(self, thread_id: str) -> bool:
+        return any(
+            self._active_requests.get(binding.runtime_id, 0) > 0
+            for binding in self._bindings.values() if binding.thread_id == thread_id
+        ) or self._adapter.has_pending_operations(thread_id)
+
+    def _release_thread_locked(self, thread_id: str) -> None:
+        self._sync_connection_generation()
+        if (thread_id not in self._live_thread_ids and thread_id not in self._pending_release
+                and not self._adapter.owns_thread(thread_id)):
+            return  # A persisted binding alone is not ownership of another process's thread.
+        if self._thread_in_use_locked(thread_id):
+            raise CodexRuntimeError("runtime_busy", "The thread still has unfinished requests.", retryable=True)
+        self._pending_release.add(thread_id)
+        self._live_thread_ids.discard(thread_id)
+        for runtime_id, binding in list(self._bindings.items()):
+            if binding.thread_id == thread_id:
+                self._bindings[runtime_id] = replace(binding, status="detached")
+        try:
+            result = self._adapter.release_thread(thread_id=thread_id)
+            if result.get("resources_released") is not True:
+                raise CodexRuntimeError("runtime_cleanup_incomplete", "Codex did not confirm thread release.", retryable=True)
+        except CodexRuntimeError as exc:
+            self._cleanup_error = exc.code
+            raise
+        self._pending_release.discard(thread_id)
+        if not self._pending_release:
+            self._cleanup_error = None
+
+    def _compensate_allocation(self, thread_id: str, error: CodexRuntimeError) -> None:
+        with self._lock:
+            try:
+                self._release_thread_locked(thread_id)
+            except CodexRuntimeError:
+                error.side_effects["resource_cleanup_pending"] = True
+            else:
+                error.side_effects["resources_released"] = True
 
     def _ensure_store(self) -> None:
         if self._load_error is not None:
@@ -661,7 +774,18 @@ class CodexRuntimeManager:
             if suppress_errors:
                 return []
             raise self._load_error
-        with self._lock:
+        with self._allocation_lock, self._lock:
+            self._sync_connection_generation()
+            try:
+                self._adapter.cleanup_abandoned_threads()
+                owned = self._live_thread_ids | self._pending_release
+                bound = {item.thread_id for item in self._bindings.values()}
+                for thread_id in owned - bound:
+                    self._release_thread_locked(thread_id)
+            except CodexRuntimeError as exc:
+                self._cleanup_error = exc.code
+                if not suppress_errors:
+                    raise
             return self._collect_expired_idle_locked(
                 now=time.time(),
                 suppress_errors=suppress_errors,
@@ -678,7 +802,18 @@ class CodexRuntimeManager:
             binding
             for binding in self._bindings.values()
             if now - binding.last_used_at >= self.idle_ttl_seconds
+            and not self._thread_in_use_locked(binding.thread_id)
         ]
+        released = []
+        for binding in expired:
+            if self._gc_stop.is_set():
+                break
+            try:
+                self._release_thread_locked(binding.thread_id)
+            except CodexRuntimeError:
+                continue  # Keep the binding and retry physical cleanup on the next collection.
+            released.append(binding)
+        expired = released
         if not expired:
             return []
         expired_ids = {binding.runtime_id for binding in expired}
@@ -710,14 +845,16 @@ class CodexRuntimeManager:
         if required <= 0:
             return []
         self._collect_expired_idle_locked(now=time.time())
-        overflow = len(self._bindings) + required - self.max_runtimes
+        bound = {item.thread_id for item in self._bindings.values()}
+        unbound_resources = len((self._live_thread_ids | self._pending_release) - bound)
+        overflow = len(self._bindings) + unbound_resources + required - self.max_runtimes
         if overflow <= 0:
             return []
         candidates = sorted(
             (
                 binding
                 for binding in self._bindings.values()
-                if binding.status == "detached"
+                if binding.status == "detached" and not self._thread_in_use_locked(binding.thread_id)
             ),
             key=lambda binding: (binding.last_used_at, binding.created_at, binding.runtime_id),
         )
@@ -733,6 +870,8 @@ class CodexRuntimeManager:
                 },
             )
         evicted = candidates[:overflow]
+        for binding in evicted:
+            self._release_thread_locked(binding.thread_id)
         evicted_ids = {binding.runtime_id for binding in evicted}
         updated = {
             runtime_id: binding
@@ -752,10 +891,11 @@ class CodexRuntimeManager:
         with self._lock:
             if generation != self._observed_connection_generation:
                 self._live_thread_ids.clear()
+                self._pending_release.clear()
                 self._observed_connection_generation = generation
 
     @contextmanager
-    def _request_slot(self):
+    def _request_slot(self, *, runtime_id: str | None = None, thread_id: str | None = None):
         acquired = self._slots.acquire(timeout=max(1.0, self.default_timeout_ms / 1000.0))
         if not acquired:
             raise CodexRuntimeError(
@@ -764,9 +904,25 @@ class CodexRuntimeManager:
                 retryable=True,
                 details={"max_concurrency": self.max_concurrency},
             )
+        registered = False
         try:
+            if runtime_id is not None:
+                with self._lock:
+                    current = self._active_binding(runtime_id)
+                    if current.thread_id != thread_id:
+                        raise CodexRuntimeError("runtime_changed", "The runtime changed while waiting; retry.", retryable=True)
+                    self._active_requests[runtime_id] = self._active_requests.get(runtime_id, 0) + 1
+                    registered = True
             yield
         finally:
+            if registered:
+                with self._lock:
+                    self._touch(runtime_id)
+                    remaining = self._active_requests[runtime_id] - 1
+                    if remaining:
+                        self._active_requests[runtime_id] = remaining
+                    else:
+                        self._active_requests.pop(runtime_id, None)
             self._slots.release()
 
     def _active_binding(self, runtime_id: str) -> RuntimeBinding:
