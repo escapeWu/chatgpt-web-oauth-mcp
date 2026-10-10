@@ -866,6 +866,8 @@ def grep_files(
     stderr_thread.start()
 
     parse_error: Exception | None = None
+    malformed_events = 0
+    parsed_events = 0
     intentional_stop = False
     current_count_path: str | None = None
     current_count = 0
@@ -889,13 +891,22 @@ def grep_files(
             if not raw_line:
                 break
             if len(raw_line) > _MAX_RIPGREP_EVENT_BYTES and not raw_line.endswith(b"\n"):
-                raise _RipgrepOutputError(
-                    "ripgrep emitted a JSON event larger than the bounded event limit"
-                )
+                # A single oversized event (a file with a huge single line, for example) must
+                # not abort an otherwise usable search: keep what was parsed.
+                malformed_events += 1
+                if parsed_events == 0:
+                    raise _RipgrepOutputError(
+                        "ripgrep emitted a JSON event larger than the bounded event limit"
+                    )
+                break
             try:
                 event = json.loads(raw_line)
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise _RipgrepOutputError(f"ripgrep emitted invalid JSON: {exc}") from exc
+                malformed_events += 1
+                if parsed_events == 0:
+                    raise _RipgrepOutputError(f"ripgrep emitted invalid JSON: {exc}") from exc
+                break
+            parsed_events += 1
             if not isinstance(event, dict):
                 continue
             event_type = event.get("type")
@@ -935,6 +946,11 @@ def grep_files(
         parse_error = exc
     finally:
         process.stdout.close()
+
+    if malformed_events:
+        if page is not None:
+            page.force_stop("malformed_ripgrep_event")
+        intentional_stop = True
 
     if parse_error is None:
         if content_collector is not None:

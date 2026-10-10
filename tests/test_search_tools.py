@@ -375,3 +375,39 @@ def test_grep_files_reports_unexpected_backend_exit(tmp_path: Path) -> None:
         "exit_code": 7,
         "stderr": "simulated failure",
     }
+
+
+def test_grep_files_keeps_matches_when_a_ripgrep_event_exceeds_the_event_limit(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "one.txt").write_text("hello\n", encoding="utf-8")
+    fake_rg = tmp_path / "fake-rg-huge-event"
+    match_event = (
+        '{"type":"match","data":{"path":{"text":"one.txt"},'
+        '"lines":{"text":"hello\\n"},"line_number":1,"absolute_offset":0,'
+        '"submatches":[{"match":{"text":"hello"},"start":0,"end":5}]}}'
+    )
+    fake_rg.write_text(
+        "#!/bin/sh\n"
+        f"printf '%s\\n' '{match_event}'\n"
+        "python3 -c \"print('x' * 2000000)\"\n"
+        f"printf '%s\\n' '{match_event}'\n",
+        encoding="utf-8",
+    )
+    fake_rg.chmod(0o755)
+
+    result = grep_files(
+        tmp_path,
+        pattern="hello",
+        glob_pattern=None,
+        output_mode="content",
+        head_limit=20,
+        offset=0,
+        rg_binary=str(fake_rg),
+    )
+
+    assert result["success"] is True
+    assert len(result["matches"]) == 1
+    assert result["matches"][0]["line"] == "hello"
+    assert result["truncated"] is True
+    assert result["stop_reason"] == "malformed_ripgrep_event"
