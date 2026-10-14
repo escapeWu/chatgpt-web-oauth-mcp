@@ -243,6 +243,7 @@ watchdog 负责检查服务健康状态。doctor 脚本会按照失败阈值和�
 | `get_file_use` | 加载文件发现、读取、code-map、编辑、编码、分页与 CAS 契约 |
 | `get_process_use` | 加载 command/job/tmux 的选择与生命周期契约 |
 | `get_git_use` | 加载 repository、commit、history 与 worktree 安全契约 |
+| `get_runtime_use` | 加载 Codex runtime 生命周期指南：命名、复用、容量处理与 MCP 调用 |
 | `set_default_cwd` / `get_default_cwd` | 设置或读取 session 级默认工作目录 |
 | `env_snapshot` / `env_diff` | 收集小型只读环境快照，并比较两个 inline snapshot |
 
@@ -287,6 +288,7 @@ watchdog 负责检查服务健康状态。doctor 脚本会按照失败阈值和�
 | `job_output` | 使用独立 raw-byte cursor 读取一个 stdout/stderr stream |
 | `job_tail` | 以兼容 API 读取最后若干行 |
 | `job_kill` | 停止正在运行的任务 |
+| `execution_state` | 返回当前工作目录下持久 job 与 tmux 会话的服务端执行状态快照 |
 
 ### 持久 tmux 会话
 
@@ -300,6 +302,21 @@ watchdog 负责检查服务健康状态。doctor 脚本会按照失败阈值和�
 | `tmux_kill` | 删除一个精确匹配的 session |
 
 `tmux_capture` 不是无损应用日志。全屏 TUI、进度条、回车覆盖更新和 tmux history limit 都会影响可见内容。需要保留终端历史时，优先使用应用日志，或使用类似 `--no-alt-screen` 的模式。
+
+### Codex runtime 与 MCP 访问
+
+可跨越单次工具调用存活的持久 Codex App Server thread，以及对其所连接 MCP server 的访问。首次使用前先加载 `get_runtime_use`。
+
+| 工具 | 用途 |
+| --- | --- |
+| `codex_runtime_acquire` | 按精确的 name、cwd 与 sandbox 获取或创建稳定的逻辑 runtime，复用最近使用的匹配绑定 |
+| `codex_runtime_open` | 为一个 cwd 与 sandbox 策略创建新的持久 Codex thread；不会启动 LLM turn |
+| `codex_runtime_list` | 按最近使用倒序列出已持久化的 runtime 绑定，可按 name、cwd、status 过滤 |
+| `codex_runtime_resume` | 按 `runtime_id` 恢复已持久化的 runtime，或绑定显式的 `thread_id` |
+| `codex_runtime_status` | 返回单个 runtime 的有界元数据，不含 thread 历史 |
+| `codex_runtime_close` | 分离 runtime 绑定；设置 `release_resources=true` 时还会卸载其内存中的 thread 与工具进程 |
+| `codex_mcp_inventory` | 列出 Codex thread 所连接的 MCP server、认证状态、resources 与 tools（分页、有界） |
+| `codex_mcp_call` | 调用 Codex thread 所连接的某个 MCP 工具，不启动 turn |
 
 ### 操作指南
 
@@ -365,6 +382,15 @@ Token-aware 只读响应使用 `o200k_base` 编码，并提供统一结果协议
 | `CHATGPT_MCP_CODEX_COMMAND` | 否 | `codex` |
 | `CHATGPT_MCP_CODEX_RUNTIME_CUA_APPROVAL_MODE` | 否 | `interactive`；也支持受限的 `prototype` 和 `deny` |
 | `CHATGPT_MCP_CODEX_RUNTIME_CUA_ALLOWED_APPS` | 否 | 空；逗号分隔的精确 App bundle ID allowlist |
+| `CHATGPT_MCP_CODEX_RUNTIME_DEFAULT_SANDBOX` | 否 | `workspace-write` |
+| `CHATGPT_MCP_CODEX_RUNTIME_MAX_CONCURRENCY` | 否 | `8` 个并发 runtime 操作 |
+| `CHATGPT_MCP_CODEX_RUNTIME_MAX_RUNTIMES` | 否 | `64` 个持久化 runtime 绑定 |
+| `CHATGPT_MCP_CODEX_RUNTIME_IDLE_TTL_SECONDS` | 否 | `28800` 秒（8 小时）；超时的空闲绑定会被回收 |
+| `CHATGPT_MCP_CODEX_RUNTIME_STARTUP_TIMEOUT_SECONDS` | 否 | `15` 秒 |
+| `CHATGPT_MCP_CODEX_RUNTIME_DEFAULT_TIMEOUT_MS` | 否 | `120000` 毫秒；不得超过最大超时 |
+| `CHATGPT_MCP_CODEX_RUNTIME_MAX_TIMEOUT_MS` | 否 | `300000` 毫秒 |
+| `CHATGPT_MCP_CODEX_RUNTIME_OUTPUT_MAX_BYTES` | 否 | `1048576` 字节 |
+| `CHATGPT_MCP_CODEX_RUNTIME_MAX_MESSAGE_BYTES` | 否 | `8388608` 字节 |
 | `CHATGPT_MCP_PI_COMMAND` | 否 | `pi` |
 | `CHATGPT_MCP_COMMAND_TIMEOUT` | 否 | `120` 秒 |
 | `CHATGPT_MCP_DEBUG_MCP_LOGGING` | 否 | `0` |
@@ -400,6 +426,87 @@ Token-aware 只读响应使用 `o200k_base` 编码，并提供统一结果协议
 
 `CHATGPT_MCP_READY_FD` 是 supervisor 向 child process 传递的内部参数，不应手工配置。
 
+## 用 plugin 扩展工具
+
+无需修改本仓库即可新增工具。服务启动时会发现已安装的、声明了 `chatgpt_web_oauth_mcp.tools` entry-point 组的 Python 包，
+并让每个包把自己的工具注册到 FastMCP 实例上。服务端不需要任何配置：把包安装进服务所用的虚拟环境即启用其工具，卸载即移除。
+
+### 编写 plugin
+
+plugin 就是一个普通 Python 包，带一个指向 `register(mcp)` 的 entry point：
+
+```toml
+# pyproject.toml
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "my-chatgpt-mcp-plugin"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+[project.entry-points."chatgpt_web_oauth_mcp.tools"]
+my_tools = "my_plugin:register"
+```
+
+```python
+# my_plugin/__init__.py
+from typing import Annotated, Any
+
+from pydantic import Field
+
+from chatgpt_web_oauth_mcp.tool_context import READ_ONLY_TOOL
+
+
+def register(mcp: Any) -> dict[str, object]:
+    @mcp.tool(
+        name="hello_plugin",
+        title="Hello Plugin",
+        annotations=READ_ONLY_TOOL,
+        description="Return a greeting.",
+    )
+    def hello_plugin(name: Annotated[str, Field(description="Who to greet.")]) -> dict[str, Any]:
+        return {"message": f"Hello, {name}!"}
+
+    return {"hello_plugin": hello_plugin}
+```
+
+`register(mcp)` 接收 FastMCP 实例，用 `@mcp.tool(...)` 注册工具，写法与内置模块一致；可选地返回 `{名称: 函数}` 映射。
+工具名必须唯一，不要复用内置工具名。
+
+### 安装与生效
+
+```bash
+# 装进运行服务的同一个虚拟环境
+.venv/bin/python -m pip install -e ./my-plugin      # 或：uv pip install --python .venv/bin/python -e ./my-plugin
+# 然后用你的进程管理器重启服务（systemd、launchd 等）
+```
+
+- plugin 只在启动时发现一次；安装或卸载后需要重启（没有热加载）。
+- 调用 `server_info` 确认工具已注册；在 ChatGPT 里刷新 connector，新工具才会出现。
+- 某个 plugin 导入或注册失败，会带 traceback 记录日志（`tool plugin 'my_tools' failed to load and was skipped`）并被跳过，
+  服务和其他 plugin 不受影响。
+- 想在不重启的情况下修改工具的具体行为：让工具函数保持很薄，把自己的代码在每次调用时按需加载。
+  修改工具名、参数或注解仍然需要重启。
+
+### 选择 annotations
+
+客户端会用 annotations 判断一次调用的风险，所以请声明“真实情况下最弱的那一档”。预设在 `chatgpt_web_oauth_mcp.tool_context`：
+
+| 预设 | 含义 | 适用 |
+| --- | --- | --- |
+| `READ_ONLY_TOOL` | 只读、封闭世界 | 查询、列表、无副作用的校验 |
+| `LOCAL_STATE_TOOL` | 写少量本地状态，非破坏、幂等、封闭世界 | 把草稿保存到固定目录、缓存 |
+| `LOCAL_WRITE_TOOL` | 可能覆盖或删除本地数据 | 文件编辑 |
+| `OPEN_WORLD_WRITE_TOOL` | 破坏性且触达沙箱之外 | 任意命令执行（`run_command`） |
+
+与其给客户端一个通用的命令执行器，不如提供几个 schema 精确的窄工具：更容易授权、更容易审计，也更不容易被客户端侧的安全检查拦截。
+
+### 安全
+
+plugin 在服务进程内以服务的权限运行，没有沙箱。只安装可信的包，校验工具接收的每个路径和参数，并把副作用限制在工具真正需要的最小位置。
+
 ## 安全模型
 
 这个 server 会暴露强大的本地能力。必须将公网 endpoint 和所有认证信息视为敏感数据。
@@ -410,6 +517,7 @@ Token-aware 只读响应使用 `o200k_base` 编码，并提供统一结果协议
 - 绝对路径仍会按绝对路径处理。
 - `run_command`、`job_*`、`tmux_*`、写入工具和 Git 写操作都能以 server process 的权限修改本机。
 - 只连接可信 ChatGPT 账号/工作空间，只暴露你愿意授权的工具。
+- server 启动的子进程（命令、job、tmux、Git、搜索、Codex App Server）的环境里会移除 `CHATGPT_MCP_AUTH_TOKEN`、`CHATGPT_MCP_OAUTH_LOGIN_TOKEN` 与 `CHATGPT_MCP_HEALTH_TOKEN`；server 环境中的其他凭据仍会被继承，请保持该环境尽量精简。
 - `CHATGPT_MCP_AUTH_TOKEN` 与 `CHATGPT_MCP_OAUTH_LOGIN_TOKEN` 应使用两个不同的随机值。
 - 保持 `CHATGPT_MCP_PUBLIC_BASE_URL` 稳定，不要依赖不可信 Host header 生成 OAuth issuer metadata。
 - 默认 cwd 建议指向独立 workspace，而不是整个 home directory。

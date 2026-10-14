@@ -243,6 +243,7 @@ The watchdog checks service health. The doctor script applies targeted restarts 
 | `get_file_use` | Load the file discovery, reading, code-map, editing, encoding, pagination, and CAS contract |
 | `get_process_use` | Load the command/job/tmux selection and lifecycle contract |
 | `get_git_use` | Load the repository, commit, history, and worktree safety contract |
+| `get_runtime_use` | Load the Codex runtime lifecycle guide: naming, reuse, capacity handling, and MCP calls |
 | `set_default_cwd` / `get_default_cwd` | Set or read the session-wide default working directory |
 | `env_snapshot` / `env_diff` | Collect a small read-only environment snapshot and compare two inline snapshots |
 
@@ -287,6 +288,7 @@ The watchdog checks service health. The doctor script applies targeted restarts 
 | `job_output` | Read one stdout/stderr stream using an independent raw-byte cursor |
 | `job_tail` | Read the latest lines as a compatibility API |
 | `job_kill` | Stop a running job |
+| `execution_state` | Snapshot the server-side execution loop (durable jobs and tmux sessions) for the current working directory |
 
 ### Persistent tmux sessions
 
@@ -300,6 +302,22 @@ The watchdog checks service health. The doctor script applies targeted restarts 
 | `tmux_kill` | Remove one exact session |
 
 `tmux_capture` is not a lossless application log. Full-screen TUIs, progress bars, carriage-return updates, and tmux history limits can change what is visible. Prefer application log files, or use modes such as `--no-alt-screen` when terminal history matters.
+
+### Codex runtime and MCP access
+
+Persistent Codex App Server threads that outlive a single tool call, plus access to the MCP servers connected to them. Load
+`get_runtime_use` before the first workflow.
+
+| Tool | Purpose |
+| --- | --- |
+| `codex_runtime_acquire` | Get or create a stable logical runtime by exact name, cwd, and sandbox, reusing the most recently used matching binding |
+| `codex_runtime_open` | Create a new persistent Codex thread for one cwd and sandbox policy; never starts an LLM turn |
+| `codex_runtime_list` | List persisted runtime bindings, newest first, with optional name, cwd, and status filters |
+| `codex_runtime_resume` | Resume a persisted runtime by `runtime_id`, or bind an explicit `thread_id` |
+| `codex_runtime_status` | Return bounded metadata for one runtime without thread history |
+| `codex_runtime_close` | Detach a runtime binding; with `release_resources=true` also unload its in-memory thread and tool processes |
+| `codex_mcp_inventory` | List the MCP servers, auth status, resources, and tools connected to a Codex thread (paginated, bounded) |
+| `codex_mcp_call` | Call one MCP tool connected to a Codex thread without starting a turn |
 
 ### Operating guides
 
@@ -365,6 +383,15 @@ Batch `read_text`, `search`, and `run_command` calls use one shared response bud
 | `CHATGPT_MCP_CODEX_COMMAND` | no | `codex` |
 | `CHATGPT_MCP_CODEX_RUNTIME_CUA_APPROVAL_MODE` | no | `interactive`; also supports restricted `prototype` and `deny` |
 | `CHATGPT_MCP_CODEX_RUNTIME_CUA_ALLOWED_APPS` | no | Empty comma-separated exact app bundle-ID allowlist |
+| `CHATGPT_MCP_CODEX_RUNTIME_DEFAULT_SANDBOX` | no | `workspace-write` |
+| `CHATGPT_MCP_CODEX_RUNTIME_MAX_CONCURRENCY` | no | `8` concurrent runtime operations |
+| `CHATGPT_MCP_CODEX_RUNTIME_MAX_RUNTIMES` | no | `64` persisted runtime bindings |
+| `CHATGPT_MCP_CODEX_RUNTIME_IDLE_TTL_SECONDS` | no | `28800` seconds (8 hours); idle bindings are then garbage-collected |
+| `CHATGPT_MCP_CODEX_RUNTIME_STARTUP_TIMEOUT_SECONDS` | no | `15` seconds |
+| `CHATGPT_MCP_CODEX_RUNTIME_DEFAULT_TIMEOUT_MS` | no | `120000` ms; must not exceed the max timeout |
+| `CHATGPT_MCP_CODEX_RUNTIME_MAX_TIMEOUT_MS` | no | `300000` ms |
+| `CHATGPT_MCP_CODEX_RUNTIME_OUTPUT_MAX_BYTES` | no | `1048576` bytes |
+| `CHATGPT_MCP_CODEX_RUNTIME_MAX_MESSAGE_BYTES` | no | `8388608` bytes |
 | `CHATGPT_MCP_PI_COMMAND` | no | `pi` |
 | `CHATGPT_MCP_COMMAND_TIMEOUT` | no | `120` seconds |
 | `CHATGPT_MCP_DEBUG_MCP_LOGGING` | no | `0` |
@@ -402,20 +429,89 @@ Batch `read_text`, `search`, and `run_command` calls use one shared response bud
 
 ## Extending with tool plugins
 
-Additional tools can live in a separate package instead of this repository. A package that declares the
-`chatgpt_web_oauth_mcp.tools` entry-point group is loaded at startup; the entry point resolves to
-`register(mcp) -> dict[str, object] | None`, which registers tools on the given FastMCP instance exactly like the built-in
-modules do:
+Tools can be added without touching this repository. At startup the server discovers installed Python packages that declare
+the `chatgpt_web_oauth_mcp.tools` entry-point group and lets each one register its own tools on the FastMCP instance.
+There is nothing to configure in the server: install a package into the server's virtual environment to enable its tools,
+uninstall it to remove them.
+
+### Write a plugin
+
+A plugin is a normal Python package with one entry point that resolves to `register(mcp)`:
 
 ```toml
+# pyproject.toml
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "my-chatgpt-mcp-plugin"
+version = "0.1.0"
+requires-python = ">=3.10"
+
 [project.entry-points."chatgpt_web_oauth_mcp.tools"]
-my_tools = "my_package:register"
+my_tools = "my_plugin:register"
 ```
 
-Install the package into the same virtual environment as the server and restart it. A plugin that fails to import or
-register is logged and skipped. Plugins run inside the server process with its permissions, so only install packages you
-trust. Prefer narrow tools with accurate `annotations` (for example `READ_ONLY_TOOL` or `LOCAL_STATE_TOOL` from
-`chatgpt_web_oauth_mcp.tool_context`) over giving a client a general command runner.
+```python
+# my_plugin/__init__.py
+from typing import Annotated, Any
+
+from pydantic import Field
+
+from chatgpt_web_oauth_mcp.tool_context import READ_ONLY_TOOL
+
+
+def register(mcp: Any) -> dict[str, object]:
+    @mcp.tool(
+        name="hello_plugin",
+        title="Hello Plugin",
+        annotations=READ_ONLY_TOOL,
+        description="Return a greeting.",
+    )
+    def hello_plugin(name: Annotated[str, Field(description="Who to greet.")]) -> dict[str, Any]:
+        return {"message": f"Hello, {name}!"}
+
+    return {"hello_plugin": hello_plugin}
+```
+
+`register(mcp)` receives the FastMCP instance, registers tools with `@mcp.tool(...)` exactly like the built-in modules do, and
+may return a `{name: function}` mapping (optional). Tool names must be unique, so do not reuse a built-in name.
+
+### Install and activate
+
+```bash
+# into the same virtual environment that runs the server
+.venv/bin/python -m pip install -e ./my-plugin      # or: uv pip install --python .venv/bin/python -e ./my-plugin
+# then restart the server with your supervisor (systemd, launchd, ...)
+```
+
+- Plugins are discovered once at startup; installing or removing one needs a restart (there is no hot reload).
+- Call `server_info` to confirm the tool is registered. In ChatGPT, refresh the connector so the new tool shows up.
+- A plugin that fails to import or register is logged with its traceback
+  (`tool plugin 'my_tools' failed to load and was skipped`) and skipped; the server and the other plugins keep running.
+- To change what a tool does without restarting, keep the tool body thin and load your own code lazily on each call.
+  Changing tool names, parameters, or annotations still needs a restart.
+
+### Choosing annotations
+
+Clients use annotations to judge how risky a call is, so declare the weakest class that is true. The presets live in
+`chatgpt_web_oauth_mcp.tool_context`:
+
+| Preset | Meaning | Use for |
+| --- | --- | --- |
+| `READ_ONLY_TOOL` | Reads only, closed world | Lookups, listings, validation without side effects |
+| `LOCAL_STATE_TOOL` | Writes small local state, non-destructive, idempotent, closed world | Saving a draft to a fixed folder, caching |
+| `LOCAL_WRITE_TOOL` | Can overwrite or delete local data | File edits |
+| `OPEN_WORLD_WRITE_TOOL` | Destructive and reaches outside the sandbox | Arbitrary command execution (`run_command`) |
+
+Prefer several narrow tools with a precise schema over giving a client a general command runner: they are easier to
+authorize, easier to audit, and less likely to be refused by a client-side safety check.
+
+### Security
+
+Plugins run inside the server process with its permissions and are not sandboxed. Only install packages you trust, validate
+every path and argument a tool accepts, and keep side effects to the narrowest location the tool needs.
 
 ## Security model
 
@@ -427,6 +523,7 @@ Important boundaries:
 - Absolute paths remain absolute.
 - `run_command`, `job_*`, `tmux_*`, write tools, and Git writes can modify the local machine with the permissions of the server process.
 - Only connect trusted ChatGPT accounts/workspaces and only expose the tools you are prepared to authorize.
+- Child processes started by the server (commands, jobs, tmux, Git, search, the Codex App Server) run with `CHATGPT_MCP_AUTH_TOKEN`, `CHATGPT_MCP_OAUTH_LOGIN_TOKEN`, and `CHATGPT_MCP_HEALTH_TOKEN` removed from their environment. Other credentials in the server's environment are still inherited, so keep that environment minimal.
 - Prefer separate random values for `CHATGPT_MCP_AUTH_TOKEN` and `CHATGPT_MCP_OAUTH_LOGIN_TOKEN`.
 - Keep `CHATGPT_MCP_PUBLIC_BASE_URL` stable and do not rely on untrusted Host headers for OAuth issuer metadata.
 - Point the default cwd at a dedicated workspace rather than your whole home directory.
