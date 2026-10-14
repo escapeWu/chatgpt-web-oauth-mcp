@@ -400,6 +400,23 @@ Batch `read_text`, `search`, and `run_command` calls use one shared response bud
 
 `CHATGPT_MCP_READY_FD` is an internal supervisor-to-child handoff and should not be configured manually.
 
+## Extending with tool plugins
+
+Additional tools can live in a separate package instead of this repository. A package that declares the
+`chatgpt_web_oauth_mcp.tools` entry-point group is loaded at startup; the entry point resolves to
+`register(mcp) -> dict[str, object] | None`, which registers tools on the given FastMCP instance exactly like the built-in
+modules do:
+
+```toml
+[project.entry-points."chatgpt_web_oauth_mcp.tools"]
+my_tools = "my_package:register"
+```
+
+Install the package into the same virtual environment as the server and restart it. A plugin that fails to import or
+register is logged and skipped. Plugins run inside the server process with its permissions, so only install packages you
+trust. Prefer narrow tools with accurate `annotations` (for example `READ_ONLY_TOOL` or `LOCAL_STATE_TOOL` from
+`chatgpt_web_oauth_mcp.tool_context`) over giving a client a general command runner.
+
 ## Security model
 
 This server exposes powerful local capabilities. Treat the public endpoint and all credentials as sensitive.

@@ -65,6 +65,7 @@ from .http_compat import build_http_compat_app
 from .oauth import OAuthRuntimeConfig
 from .shell import JobRegistry
 from .tool_context import ToolContext
+from .tool_plugins import load_tool_plugins
 from .tools_core import register_core_tools
 from .tools_codex_runtime import register_codex_runtime_tools
 from .tools_files import register_file_tools
@@ -197,6 +198,7 @@ _tool_exports.update(register_skill_tools(mcp))
 _tool_exports.update(register_file_tools(mcp, _tool_context))
 _tool_exports.update(register_git_shell_tools(mcp, _tool_context))
 _tool_exports.update(register_tmux_tools(mcp, _tool_context))
+_tool_exports.update(load_tool_plugins(mcp))
 globals().update(_tool_exports)
 
 
