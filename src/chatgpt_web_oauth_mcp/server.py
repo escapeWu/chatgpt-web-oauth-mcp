@@ -69,6 +69,7 @@ from .tools_core import register_core_tools
 from .tools_codex_runtime import register_codex_runtime_tools
 from .tools_files import register_file_tools
 from .tools_git_shell import register_git_shell_tools
+from .tools_plm_web import register_plm_web_tools
 from .tools_skills import register_skill_tools
 from .tools_tmux import register_tmux_tools
 
@@ -194,6 +195,7 @@ _tool_exports: dict[str, object] = {}
 _tool_exports.update(register_core_tools(mcp, _tool_context))
 _tool_exports.update(register_codex_runtime_tools(mcp, _tool_context))
 _tool_exports.update(register_skill_tools(mcp))
+_tool_exports.update(register_plm_web_tools(mcp))
 _tool_exports.update(register_file_tools(mcp, _tool_context))
 _tool_exports.update(register_git_shell_tools(mcp, _tool_context))
 _tool_exports.update(register_tmux_tools(mcp, _tool_context))
