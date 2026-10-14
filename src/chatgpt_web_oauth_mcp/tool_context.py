@@ -74,14 +74,6 @@ class ToolContext:
         return int(self._get("COMMAND_TIMEOUT", 120))
 
     @property
-    def delegate_timeout(self) -> int:
-        return int(self._get("DELEGATE_TIMEOUT", 300))
-
-    @property
-    def delegate_wait_timeout(self) -> int:
-        return int(self._get("DELEGATE_WAIT_TIMEOUT", self.delegate_timeout))
-
-    @property
     def tool_output_token_budget(self) -> int:
         return int(self._get("TOOL_OUTPUT_TOKEN_BUDGET", 8500))
 
@@ -127,14 +119,6 @@ class ToolContext:
         return frozenset(str(item) for item in value)
 
     @property
-    def pi_command(self) -> str | None:
-        return self._get("PI_COMMAND")
-
-    @property
-    def delegate_default_harness(self) -> str:
-        return str(self._get("DELEGATE_DEFAULT_HARNESS", "codex"))
-
-    @property
     def tmux_binary(self) -> str:
         return str(self._get("TMUX_BINARY", "tmux"))
 
@@ -145,10 +129,6 @@ class ToolContext:
     @property
     def tmux_control_timeout(self) -> int:
         return int(self._get("TMUX_CONTROL_TIMEOUT", 10))
-
-    @property
-    def registry(self) -> Any:
-        return self._get("registry")
 
     @property
     def codex_runtime_manager(self) -> Any:

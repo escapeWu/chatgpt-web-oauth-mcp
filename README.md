@@ -392,7 +392,6 @@ Batch `read_text`, `search`, and `run_command` calls use one shared response bud
 | `CHATGPT_MCP_CODEX_RUNTIME_MAX_TIMEOUT_MS` | no | `300000` ms |
 | `CHATGPT_MCP_CODEX_RUNTIME_OUTPUT_MAX_BYTES` | no | `1048576` bytes |
 | `CHATGPT_MCP_CODEX_RUNTIME_MAX_MESSAGE_BYTES` | no | `8388608` bytes |
-| `CHATGPT_MCP_PI_COMMAND` | no | `pi` |
 | `CHATGPT_MCP_COMMAND_TIMEOUT` | no | `120` seconds |
 | `CHATGPT_MCP_DEBUG_MCP_LOGGING` | no | `0` |
 | `CHATGPT_MCP_GRACEFUL_SHUTDOWN_SECONDS` | no | `30` seconds |

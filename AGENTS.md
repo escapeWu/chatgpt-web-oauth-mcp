@@ -17,7 +17,7 @@ ChatGPT Web ──OAuth + HTTPS──▶ FastMCP Server (uvicorn)
 
 ChatGPT Web is the architect/manager/reviewer. It should inspect, plan, and
 review through direct MCP tools. Persistent Codex access uses `codex_runtime_*`
-and `codex_mcp_*`; the old delegate tool family is not MCP-exposed.
+and `codex_mcp_*`; the old delegate tool family has been removed.
 
 ## Source layout
 
@@ -43,13 +43,7 @@ src/chatgpt_web_oauth_mcp/
 ├── search.py      # glob/regex/text search implementations
 ├── shell.py       # run_command subprocess helper
 ├── tmux_ops.py    # bounded persistent tmux session wrapper
-├── delegate_models.py # Legacy internal delegate implementation (not MCP-exposed)
-├── delegate_harnesses.py # Legacy internal harness adapters (not MCP-exposed)
-├── delegate_guidance.py # Shared progressive-disclosure guide definitions
-├── delegate_project.py # Legacy internal project identity resolution
-├── delegate_scheduler.py # Legacy internal scheduler
-├── delegate_process.py # Legacy internal harness process implementation
-├── executors.py   # Internal compatibility facade; delegate methods are not MCP-exposed
+├── guidance.py    # Shared progressive-disclosure guide definitions
 ├── tools_skills.py # Skill-index/use tools and matching MCP resources
 └── supervisor.py  # rolling-reload supervisor for tunnels / launchd
 ```
@@ -87,7 +81,7 @@ src/chatgpt_web_oauth_mcp/
 - `skill://chatgpt-web-oauth-mcp/runtime-use` covers stable Codex runtime reuse, concurrency, idle-TTL GC, and detached-binding LRU.
 - `skill://chatgpt-web-oauth-mcp/git-use` covers repository inspection, commits, history, and worktrees.
 - The matching tools exist for clients and gateways that expose tools more reliably than MCP resources.
-- Keep guidance in `delegate_guidance.py`; do not maintain a second handwritten filesystem-skill copy.
+- Keep guidance in `guidance.py`; do not maintain a second handwritten filesystem-skill copy.
 
 ## Key concepts
 
@@ -96,7 +90,7 @@ src/chatgpt_web_oauth_mcp/
 - `CHATGPT_MCP_PUBLIC_BASE_URL` must be set in OAuth mode so issuer and resource URLs are stable and not Host-header-derived.
 - Prefer separate `CHATGPT_MCP_AUTH_TOKEN` and `CHATGPT_MCP_OAUTH_LOGIN_TOKEN` values.
 - `tmux_*` defaults to the normal `default` tmux socket so sessions remain manually attachable. Use a separate `CHATGPT_MCP_TMUX_SOCKET_NAME` when isolation is preferred. `tmux_capture` is a terminal snapshot, not a lossless stdout/stderr log.
-- The public execution model is direct tools plus `codex_runtime_*` / `codex_mcp_*`. Legacy delegate internals may remain for compatibility during cleanup, but must not be registered as MCP tools or guidance resources.
+- The public execution model is direct tools plus `codex_runtime_*` / `codex_mcp_*`. The old delegate tool family has been removed; do not reintroduce it as MCP tools or guidance resources.
 
 ## Development rules
 

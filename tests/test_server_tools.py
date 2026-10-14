@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from chatgpt_web_oauth_mcp.executors import ExecutorRegistry
 from chatgpt_web_oauth_mcp.shell import MAX_COMMAND_TIMEOUT_SECONDS
 
 

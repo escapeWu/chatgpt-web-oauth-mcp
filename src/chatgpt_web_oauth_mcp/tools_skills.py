@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .delegate_guidance import (
+from .guidance import (
     FILE_USE_GUIDE,
     FILE_USE_URI,
     GIT_USE_GUIDE,

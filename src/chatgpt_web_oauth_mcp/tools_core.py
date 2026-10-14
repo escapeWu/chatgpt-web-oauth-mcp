@@ -6,7 +6,7 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from . import session
-from .delegate_guidance import (
+from .guidance import (
     FILE_USE_URI,
     GIT_USE_URI,
     PROCESS_USE_URI,
@@ -56,7 +56,6 @@ def register_core_tools(mcp: Any, ctx: ToolContext) -> dict[str, object]:
             "auth": ctx.current_oauth_config().normalized_auth_mode,
             "debug_mcp_logging": ctx.debug_mcp_logging,
             "codex_command": ctx.codex_command,
-            "pi_command": ctx.pi_command,
             "codex_runtime": (
                 {
                     **ctx.codex_runtime_manager.info(),

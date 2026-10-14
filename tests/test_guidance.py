@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from chatgpt_web_oauth_mcp.delegate_guidance import (
+from chatgpt_web_oauth_mcp.guidance import (
     FILE_USE_GUIDE,
     FILE_USE_URI,
     GIT_USE_GUIDE,

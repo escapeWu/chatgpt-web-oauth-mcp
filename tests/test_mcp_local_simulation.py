@@ -15,7 +15,6 @@ import uvicorn
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
-from chatgpt_web_oauth_mcp.executors import ExecutorRegistry
 
 
 def _python_cmd(code: str) -> str:
@@ -40,8 +39,6 @@ def _running_server(
 
     monkeypatch.setattr(server, "AUTH_TOKEN", auth_token)
     monkeypatch.setattr(server, "WORKSPACE_ROOT", tmp_path)
-    registry = ExecutorRegistry(codex_command=codex_command or _python_cmd("print('codex')"))
-    monkeypatch.setattr(server, "registry", registry)
 
     app = server.build_http_app()
     port = _find_free_port()

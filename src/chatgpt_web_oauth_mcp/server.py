@@ -26,18 +26,6 @@ from .config import (
     CODEX_RUNTIME_STARTUP_TIMEOUT_SECONDS,
     COMMAND_TIMEOUT,
     DEBUG_MCP_LOGGING,
-    DELEGATE_CANCEL_GRACE_SECONDS,
-    DELEGATE_DEFAULT_HARNESS,
-    DELEGATE_CODE_EXECUTION_TIMEOUT,
-    DELEGATE_CODE_MAX_GLOBAL,
-    DELEGATE_CODE_MAX_PER_PROJECT,
-    DELEGATE_EXPLORE_EXECUTION_TIMEOUT,
-    DELEGATE_EXPLORE_MAX_GLOBAL,
-    DELEGATE_EXPLORE_MAX_PER_PROJECT,
-    DELEGATE_QUEUE_LIMIT_GLOBAL,
-    DELEGATE_QUEUE_LIMIT_PER_PROJECT,
-    DELEGATE_TIMEOUT,
-    DELEGATE_WAIT_TIMEOUT,
     GRACEFUL_SHUTDOWN_SECONDS,
     HOST,
     JOB_OUTPUT_TOKEN_BUDGET,
@@ -45,7 +33,6 @@ from .config import (
     OAUTH_SCOPES,
     OAUTH_TOKEN_TTL_SECONDS,
     PORT,
-    PI_COMMAND,
     PUBLIC_BASE_URL,
     READ_TOKEN_BUDGET,
     RIPGREP_BINARY,
@@ -60,7 +47,6 @@ from .config import (
     ensure_runtime_directories,
 )
 from .codex_runtime import CodexRuntimeManager
-from .executors import ExecutorRegistry
 from .http_compat import build_http_compat_app
 from .oauth import OAuthRuntimeConfig
 from .shell import JobRegistry
@@ -78,20 +64,6 @@ from .tools_tmux import register_tmux_tools
 # so unauthenticated clients can't even open an SSE session. The FastMCP
 # protocol-layer middleware was redundant and has been removed.
 
-registry = ExecutorRegistry(
-    codex_command=CODEX_COMMAND,
-    pi_command=PI_COMMAND,
-    default_harness=DELEGATE_DEFAULT_HARNESS,
-    max_explore_per_project=DELEGATE_EXPLORE_MAX_PER_PROJECT,
-    max_explore_global=DELEGATE_EXPLORE_MAX_GLOBAL,
-    max_code_per_project=DELEGATE_CODE_MAX_PER_PROJECT,
-    max_code_global=DELEGATE_CODE_MAX_GLOBAL,
-    queue_limit_per_project=DELEGATE_QUEUE_LIMIT_PER_PROJECT,
-    queue_limit_global=DELEGATE_QUEUE_LIMIT_GLOBAL,
-    explore_execution_timeout_seconds=DELEGATE_EXPLORE_EXECUTION_TIMEOUT,
-    code_execution_timeout_seconds=DELEGATE_CODE_EXECUTION_TIMEOUT,
-    cancel_grace_seconds=DELEGATE_CANCEL_GRACE_SECONDS,
-)
 job_registry = JobRegistry()
 codex_runtime_manager = CodexRuntimeManager(
     state_dir=STATE_DIR,
