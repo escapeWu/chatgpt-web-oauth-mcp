@@ -72,6 +72,9 @@ OAUTH_SCOPES = tuple(
     if scope
 )
 OAUTH_TOKEN_TTL_SECONDS = int(os.environ.get("CHATGPT_MCP_OAUTH_TOKEN_TTL_SECONDS", "86400"))
+OAUTH_REFRESH_TOKEN_TTL_SECONDS = int(
+    os.environ.get("CHATGPT_MCP_OAUTH_REFRESH_TOKEN_TTL_SECONDS", "15552000")
+)
 CODEX_COMMAND = os.environ.get("CHATGPT_MCP_CODEX_COMMAND", "codex").strip()
 CODEX_RUNTIME_DEFAULT_SANDBOX: SandboxMode = validate_sandbox(
     os.environ.get("CHATGPT_MCP_CODEX_RUNTIME_DEFAULT_SANDBOX", "workspace-write").strip().lower()

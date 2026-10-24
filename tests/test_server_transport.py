@@ -485,6 +485,30 @@ def test_http_app_oauth_dcr_pkce_flow_allows_mcp_access(monkeypatch, tmp_path) -
         assert response.status_code == 200
         assert response.json()["transport"]["endpoint"] == "/mcp"
 
+        # Refresh over HTTP exactly as ChatGPT does: form-encoded, public client.
+        refreshed = client.post(
+            "/oauth/token",
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": token.json()["refresh_token"],
+                "client_id": client_id,
+                "resource": "https://mcp.example.test/mcp",
+            },
+        )
+        assert refreshed.status_code == 200
+        assert refreshed.json()["refresh_token"] != token.json()["refresh_token"]
+        response = client.get(
+            "/mcp",
+            headers={"Accept": "*/*", "Authorization": f"Bearer {refreshed.json()['access_token']}"},
+        )
+        assert response.status_code == 200
+        bad = client.post(
+            "/oauth/token",
+            data={"grant_type": "refresh_token", "refresh_token": "mcp_rt_bogus", "client_id": client_id},
+        )
+        assert bad.status_code == 400
+        assert bad.json()["error"] == "invalid_grant"
+
 
 def test_http_app_supports_legacy_sse_get_on_mcp(tmp_path, monkeypatch) -> None:
     with _running_server(tmp_path, monkeypatch) as url:

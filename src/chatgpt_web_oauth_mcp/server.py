@@ -31,6 +31,7 @@ from .config import (
     JOB_OUTPUT_TOKEN_BUDGET,
     OAUTH_LOGIN_TOKEN,
     OAUTH_SCOPES,
+    OAUTH_REFRESH_TOKEN_TTL_SECONDS,
     OAUTH_TOKEN_TTL_SECONDS,
     PORT,
     PUBLIC_BASE_URL,
@@ -147,6 +148,9 @@ def _current_oauth_config() -> OAuthRuntimeConfig:
         oauth_login_token=globals().get("OAUTH_LOGIN_TOKEN", "") or "",
         oauth_scopes=tuple(globals().get("OAUTH_SCOPES", ("local-ops",)) or ("local-ops",)),
         oauth_token_ttl_seconds=int(globals().get("OAUTH_TOKEN_TTL_SECONDS", 86400) or 86400),
+        oauth_refresh_token_ttl_seconds=int(
+            globals().get("OAUTH_REFRESH_TOKEN_TTL_SECONDS", 15_552_000) or 15_552_000
+        ),
     )
 
 
