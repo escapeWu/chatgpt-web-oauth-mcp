@@ -15,6 +15,14 @@ from urllib.parse import urlencode, urlparse
 
 DEFAULT_SCOPE = "local-ops"
 MAX_REGISTERED_CLIENTS = 50
+REFRESH_TOKEN_TTL_SECONDS = 180 * 24 * 60 * 60
+# A rotated refresh token presented again within this window is treated as a concurrent retry;
+# later reuse revokes the whole grant (OAuth 2.1 refresh-token rotation for public clients).
+REFRESH_TOKEN_REUSE_GRACE_SECONDS = 60
+# Rotated records are kept this long only to detect reuse, then pruned.
+ROTATED_REFRESH_TOKEN_RETENTION_SECONDS = 7 * 24 * 60 * 60
+OFFLINE_ACCESS_SCOPE = "offline_access"
+GRANT_TYPES = ("authorization_code", "refresh_token")
 
 
 @dataclass(frozen=True)
@@ -26,6 +34,7 @@ class OAuthRuntimeConfig:
     oauth_login_token: str
     oauth_scopes: tuple[str, ...]
     oauth_token_ttl_seconds: int
+    oauth_refresh_token_ttl_seconds: int = REFRESH_TOKEN_TTL_SECONDS
 
     @property
     def normalized_auth_mode(self) -> str:
@@ -73,7 +82,7 @@ class OAuthManager:
             "token_endpoint": f"{base_url}/oauth/token",
             "registration_endpoint": f"{base_url}/oauth/register",
             "response_types_supported": ["code"],
-            "grant_types_supported": ["authorization_code"],
+            "grant_types_supported": list(GRANT_TYPES),
             "token_endpoint_auth_methods_supported": ["none"],
             "code_challenge_methods_supported": ["S256"],
             "scopes_supported": list(self.config.scopes),
@@ -115,7 +124,7 @@ class OAuthManager:
             "client_id": client_id,
             "client_name": store["clients"][client_id]["client_name"],
             "redirect_uris": redirect_uris,
-            "grant_types": ["authorization_code"],
+            "grant_types": list(GRANT_TYPES),
             "response_types": ["code"],
             "token_endpoint_auth_method": "none",
             "client_id_issued_at": now,
@@ -144,7 +153,7 @@ class OAuthManager:
         if redirect_uri not in client.get("redirect_uris", []):
             raise ValueError("redirect_uri is not registered")
 
-        requested_scopes = _scope_set(payload.get("scope", ""))
+        requested_scopes = _scope_set(payload.get("scope", "")) - {OFFLINE_ACCESS_SCOPE}
         if requested_scopes and not requested_scopes.issubset(set(self.config.scopes)):
             raise ValueError("requested scope is not supported")
 
@@ -153,7 +162,7 @@ class OAuthManager:
             "client_id": client_id,
             "redirect_uri": redirect_uri,
             "code_challenge": code_challenge,
-            "scope": payload.get("scope") or self.scope_string(),
+            "scope": _without_offline_access(payload.get("scope", "")) or self.scope_string(),
             "resource": payload.get("resource"),
             "expires_at": int(time.time()) + 300,
         }
@@ -166,8 +175,10 @@ class OAuthManager:
         return f"{redirect_uri}{separator}{urlencode(query)}"
 
     def exchange_code(self, payload: dict[str, str], *, base_url: str) -> dict[str, Any]:
+        if payload.get("grant_type") == "refresh_token":
+            return self.refresh_access_token(payload, base_url=base_url)
         if payload.get("grant_type") != "authorization_code":
-            raise ValueError("grant_type must be authorization_code")
+            raise ValueError("grant_type must be authorization_code or refresh_token")
         if payload.get("resource") != self.resource_url(base_url):
             raise ValueError("resource does not match this MCP server")
 
@@ -201,13 +212,114 @@ class OAuthManager:
             "resource": code_record.get("resource"),
             "expires_at": int(time.time()) + expires_in,
         }
+        refresh_token = self._issue_refresh_token(
+            store,
+            client_id=str(payload.get("client_id") or ""),
+            scope=store["tokens"][access_token]["scope"],
+            resource=code_record.get("resource"),
+            now=int(time.time()),
+        )
         self._write_store(store)
         return {
             "access_token": access_token,
             "token_type": "Bearer",
             "expires_in": expires_in,
             "scope": store["tokens"][access_token]["scope"],
+            "refresh_token": refresh_token,
         }
+
+    def refresh_access_token(self, payload: dict[str, str], *, base_url: str) -> dict[str, Any]:
+        """Exchange a refresh token for a new access token and a rotated refresh token."""
+        raw_token = payload.get("refresh_token", "")
+        if not raw_token:
+            raise ValueError("refresh_token is required")
+        resource = self.resource_url(base_url)
+        if payload.get("resource") and payload.get("resource") != resource:
+            raise ValueError("resource does not match this MCP server")
+
+        store = self._read_store()
+        now = int(time.time())
+        pruned = _prune_refresh_tokens(store, now)
+        record = store["refresh_tokens"].get(_token_hash(raw_token))
+        if not record:
+            if pruned:
+                self._write_store(store)
+            raise ValueError("invalid or expired refresh token")
+        client_id = str(record.get("client_id") or "")
+        if payload.get("client_id") != client_id:
+            raise ValueError("client_id mismatch")
+        if record.get("resource") != resource:
+            raise ValueError("refresh token was issued for another resource")
+        if client_id not in store["clients"]:
+            raise ValueError("unknown client_id")
+        rotated_at = record.get("rotated_at")
+        if rotated_at is not None and now - int(rotated_at) > REFRESH_TOKEN_REUSE_GRACE_SECONDS:
+            family_id = record.get("family_id")
+            for key, value in list(store["refresh_tokens"].items()):
+                if isinstance(value, dict) and value.get("family_id") == family_id:
+                    store["refresh_tokens"].pop(key, None)
+            self._write_store(store)
+            raise ValueError("refresh token reuse detected; the grant was revoked")
+
+        granted = str(record.get("scope") or self.scope_string())
+        requested = _scope_set(payload.get("scope", "")) - {OFFLINE_ACCESS_SCOPE}
+        if requested and not requested.issubset(_scope_set(granted)):
+            raise ValueError("requested scope exceeds the original grant")
+        scope = " ".join(sorted(requested)) if requested else granted
+        if rotated_at is None:
+            record["rotated_at"] = now
+            record["expires_at"] = min(
+                int(record.get("expires_at") or now),
+                now + ROTATED_REFRESH_TOKEN_RETENTION_SECONDS,
+            )
+
+        access_token = "mcp_at_" + secrets.token_urlsafe(40)
+        expires_in = max(int(self.config.oauth_token_ttl_seconds), 60)
+        store["tokens"][access_token] = {
+            "client_id": client_id,
+            "scope": scope,
+            "resource": resource,
+            "expires_at": now + expires_in,
+        }
+        refresh_token = self._issue_refresh_token(
+            store,
+            client_id=client_id,
+            scope=granted,
+            resource=resource,
+            now=now,
+            family_id=record.get("family_id"),
+        )
+        self._write_store(store)
+        return {
+            "access_token": access_token,
+            "token_type": "Bearer",
+            "expires_in": expires_in,
+            "scope": scope,
+            "refresh_token": refresh_token,
+        }
+
+    def _issue_refresh_token(
+        self,
+        store: dict[str, Any],
+        *,
+        client_id: str,
+        scope: str,
+        resource: Any,
+        now: int,
+        family_id: Any = None,
+    ) -> str:
+        """Store only the hash; the expiry slides forward on every rotation."""
+        _prune_refresh_tokens(store, now)
+        token = "mcp_rt_" + secrets.token_urlsafe(48)
+        store["refresh_tokens"][_token_hash(token)] = {
+            "client_id": client_id,
+            "scope": scope,
+            "resource": resource,
+            "family_id": family_id or "rtf_" + secrets.token_urlsafe(16),
+            "created_at": now,
+            "expires_at": now + max(int(self.config.oauth_refresh_token_ttl_seconds), 60),
+        }
+        return token
 
     def verify_access_token(self, token: str, *, base_url: str) -> bool:
         if not token:
@@ -310,17 +422,20 @@ class OAuthManager:
 
     def _read_store(self) -> dict[str, Any]:
         if not self.store_path.exists():
-            return {"clients": {}, "codes": {}, "tokens": {}}
+            return {"clients": {}, "codes": {}, "tokens": {}, "refresh_tokens": {}}
         try:
             data = json.loads(self.store_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            return {"clients": {}, "codes": {}, "tokens": {}}
+            return {"clients": {}, "codes": {}, "tokens": {}, "refresh_tokens": {}}
         if not isinstance(data, dict):
-            return {"clients": {}, "codes": {}, "tokens": {}}
+            return {"clients": {}, "codes": {}, "tokens": {}, "refresh_tokens": {}}
         return {
             "clients": data.get("clients") if isinstance(data.get("clients"), dict) else {},
             "codes": data.get("codes") if isinstance(data.get("codes"), dict) else {},
             "tokens": data.get("tokens") if isinstance(data.get("tokens"), dict) else {},
+            "refresh_tokens": (
+                data.get("refresh_tokens") if isinstance(data.get("refresh_tokens"), dict) else {}
+            ),
         }
 
     def _write_store(self, store: dict[str, Any]) -> None:
@@ -345,6 +460,27 @@ def _pkce_s256(verifier: str) -> str:
 
 def _scope_set(scope: str) -> set[str]:
     return {item for item in scope.split() if item}
+
+
+def _without_offline_access(scope: str) -> str:
+    return " ".join(item for item in (scope or "").split() if item and item != OFFLINE_ACCESS_SCOPE)
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _prune_refresh_tokens(store: dict[str, Any], now: int) -> bool:
+    changed = False
+    for key, value in list(store["refresh_tokens"].items()):
+        try:
+            expired = int(value.get("expires_at", 0)) < now
+        except (AttributeError, TypeError, ValueError):
+            expired = True
+        if expired:
+            store["refresh_tokens"].pop(key, None)
+            changed = True
+    return changed
 
 
 def _validated_public_base_url(value: str) -> str:

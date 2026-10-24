@@ -155,7 +155,7 @@ ChatGPT 套餐、工作空间、审批和写操作可用性由 ChatGPT 控制，
 
 ### OAuth 生命周期限制
 
-当前 OAuth 实现支持带 PKCE 的 authorization-code grant，并签发有过期时间的 access token。当前不签发 refresh token，也不声明 `offline_access`。当 `CHATGPT_MCP_OAUTH_TOKEN_TTL_SECONDS` 到期后，客户端可能需要重新授权。
+OAuth 实现支持带 PKCE 的 authorization-code grant 和 refresh-token grant。每次换码同时签发有过期时间的 access token（`CHATGPT_MCP_OAUTH_TOKEN_TTL_SECONDS`）和 refresh token（`CHATGPT_MCP_OAUTH_REFRESH_TOKEN_TTL_SECONDS`，默认 180 天）。refresh token 只以 SHA-256 哈希保存，每次使用都会轮换，有效期随轮换顺延，持续刷新的连接无需重新授权。轮换后的旧 refresh token 超过 60 秒再被使用，会吊销整条授权。scope 里带 `offline_access` 会被接受，但不要求也不声明。升级前建立的连接需要重连一次才能拿到 refresh token。
 
 ## OAuth endpoints
 
@@ -368,6 +368,7 @@ Token-aware 只读响应使用 `o200k_base` 编码，并提供统一结果协议
 | `CHATGPT_MCP_OAUTH_LOGIN_TOKEN` | OAuth 建议 | 回退到 `CHATGPT_MCP_AUTH_TOKEN` |
 | `CHATGPT_MCP_OAUTH_SCOPES` | 否 | `local-ops` |
 | `CHATGPT_MCP_OAUTH_TOKEN_TTL_SECONDS` | 否 | `86400` |
+| `CHATGPT_MCP_OAUTH_REFRESH_TOKEN_TTL_SECONDS` | 否 | `15552000` |
 
 ### 搜索、输出与执行
 
